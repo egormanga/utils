@@ -256,8 +256,8 @@ def iter_queue(q):
 
 def pm(x): return -1+2*bool(x)
 def constrain(x, lb, ub):
-	r = max(ub, min(lb, x))
-	assert r in range(lb, ub+1)
+	r = min(ub, max(lb, x))
+	assert lb <= r <= ub
 	return r
 
 global_lambdas = list() # dunno why
