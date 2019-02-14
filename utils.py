@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# Utils lib v0.6
+# Utils lib v0.7
 
 """ Sdore's Utils
 
@@ -37,7 +37,7 @@ def Simport(x):
 	try: globals()[x[-1]] = __import__(x[0])
 	except ImportError: globals()[x[-1]] = NonExistentModule(x[0])
 
-for i in ('io', 'os', 're', 'sys', 'copy', 'dill', 'math', 'time', 'queue', 'locale', 'random', 'regex', 'select', 'signal', 'shutil', 'inspect', 'argparse', 'datetime', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
+for i in ('io', 'os', 're', 'sys', 'base64', 'copy', 'dill', 'glob', 'math', 'time', 'queue', 'locale', 'random', 'regex', 'select', 'signal', 'shutil', 'getpass', 'inspect', 'argparse', 'datetime', 'requests', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
 logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
@@ -60,7 +60,7 @@ function = type(lambda: None)
 
 def set_dbg_user_id(x): global dbg_user_id; dbg_user_id = x
 
-def log(l=None, *x, sep=' ', end='\n', raw=False, tm=None, format=False, unlock=0, nolog=False):
+def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, unlock=0, nolog=False):
 	""" Log anything. Print (formatted with datetime) to stderr and logfile (if set). Should be compatible with builtins.print().
 	Parameters:
 		l (optional): level, must be >= global loglevel to print to stderr rather than only to logfile (or /dev/null).
@@ -83,8 +83,8 @@ def log(l=None, *x, sep=' ', end='\n', raw=False, tm=None, format=False, unlock=
 	if (not unlock and loglock[-1][0]): loglock[-1][1].append(((_l, *_x), dict(sep=sep, end=end, raw=raw, tm=tm, nolog=nolog))); return clearstr
 	try: lc = logcolor[l]
 	except: lc = ''
-	ll = f' [\033[1m{lc}LV{l}\033[0;96m]' if (l is not None) else ''
-	logstr = time.strftime(f"\033[K\033[96m[%x %X]\033[0;96m{ll}\033[0;1m{' '+x if (x is not '') else ''}\033[0m{end}", tm) if (not raw) else str(x)+end
+	if (ll is None): ll = f' [\033[1m{lc}LV{l}\033[0;96m]' if (l is not None) else ''
+	logstr = f"\033[K\033[96m[{time.strftime('%x %X', tm)}]\033[0;96m{ll}\033[0;1m{' '+x if (x is not '') else ''}\033[0m{end}" if (not raw) else str(x)+end
 	if (logfile and not nolog): logfile.write(logstr)
 	if (l is None or l <= loglevel): logoutput.write(logstr); logoutput.flush()
 	if (unlock and loglock[-1][0] == unlock):
@@ -92,7 +92,8 @@ def log(l=None, *x, sep=' ', end='\n', raw=False, tm=None, format=False, unlock=
 		for i in _loglock[1]: log(*i[0], **i[1], unlock=_loglock[0])
 	return clearstr
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
-def logdumb(**kwargs): log(raw=True, end='', **kwargs)
+def dlog(*args, **kwargs): parseargs(kwargs, ll=' \033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m'); return log(*args, **kwargs)
+def logdumb(**kwargs): return log(raw=True, end='', **kwargs)
 def logstart(x): """ from utils import *; logstart(name) """; log(x+'\033[0m...', end=' '); locklog()
 def logstate(state, x=''): log(state+(': '+str(x))*bool(str(x))+'\033[0m', raw=True, unlock=loglock[-1][0])
 def logstarted(x=''): """ if (__name__ == '__main__'): logstart(); main() """; logstate('\033[94mstarted', x)
@@ -121,7 +122,7 @@ def exception(ex, once=False, nolog=False):
 	if (type(ex) == type and issubclass(ex, BaseException)): ex = ex()
 	exc = repr(ex).split('(')[0]
 	e = log(('\033[91mCaught ' if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+f"{exc}{(' on line '+'→'.join(map(lambda x: str(x[1]), traceback.walk_tb(ex.__traceback__)))).rstrip(' on line')}\033[0m{(': '+str(ex))*bool(str(ex))}")
-	if (nolog or sendex is ImportError): return
+	if (not dbg_user_id or nolog or sendex is ImportError): return
 	if (sendex is None):
 		try: from api import send as sendex
 		except ImportError: sendex = ImportError; return
@@ -160,8 +161,9 @@ def progress(cv, mv, pv="▏▎▍▌▋▊▉█", fill='░', border='│', pr
 class DB:
 	""" All-in-one lightweight database class. """
 	def __init__(self, file=None):
-		self.fields = dict()
 		self.setfile(file)
+		self.fields = dict()
+		self.setnolog(False)
 		self.setbackup(True)
 	def setfile(self, file):
 		self.file = file
@@ -169,12 +171,15 @@ class DB:
 		try: self.file = open(file, 'r+b')
 		except FileNotFoundError: self.file = open(file, 'w+b')
 		return True
+	def setnolog(self, nolog=True):
+		self.nolog = bool(nolog)
 	def setbackup(self, backup):
 		self.backup = bool(backup)
 	def register(self, *fields):
 		globals = inspect.stack()[1][0].f_globals
 		for field in fields: self.fields[field] = globals
-	def load(self, nolog=False):
+	def load(self, nolog=None):
+		nolog = (self.nolog if (nolog is None) else nolog)
 		if (not self.file): return
 		if (not nolog): logstart('Loading database')
 		db = dict()
@@ -188,10 +193,12 @@ class DB:
 			if (field in db): self.fields[field][field] = db.get(field)
 			elif (not nolog): log(1, f"Not in DB: {field}")
 		return db
-	def save(self, db={}, backup=None, nolog=False):
+	def save(self, db={}, backup=None, nolog=None):
+		nolog = (self.nolog if (nolog is None) else nolog)
+		backup = (self.backup if (backup is None) else backup)
 		if (not self.file): return
 		if (not nolog): logstart('Saving database')
-		if (self.backup if (backup is None) else backup):
+		if (backup):
 			try: os.mkdir('backup')
 			except: pass
 			try: shutil.copyfile(self.file.name, time.strftime('backup/%s.db'))
@@ -251,6 +258,8 @@ def isiterable(x):
 	except TypeError: return False
 	else: return True
 
+def isinteger(x): return isinstance(x, (int, float))
+
 def iter_queue(q):
 	while (not q.empty()): yield q.get()
 
@@ -258,6 +267,10 @@ def pm(x): return -1+2*bool(x)
 def constrain(x, lb, ub):
 	r = min(ub, max(lb, x))
 	assert lb <= r <= ub
+	return r
+def prod(x):
+	r = 1
+	for i in x: r *= i
 	return r
 
 global_lambdas = list() # dunno why
@@ -287,20 +300,26 @@ class classproperty:
 	def __get__(self, obj, owner):
 		return self.f(owner)
 
+def preeval(f):
+        r = f()
+        return lambda: r
+
 class WTFException(Exception): pass
+class TODO(NotImplementedError): pass
 
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args)
 
 def setonsignals(f): signal.signal(signal.SIGINT, f); signal.signal(signal.SIGTERM, f)
 
 def tla(s="<mode> <*args>"): raise DeprecationWarning()
-def exit(c=None, code=None, raw=False):
+def exit(c=None, code=None, raw=False, nolog=False):
 	sys.stderr.write('\r')
 	unlocklog()
-	db.save()
-	log(f'{c}' if (raw) else f'Exit: {c}' if (c and type(c) == str or hasattr(c, 'args') and c.args) else 'Exit.')
+	db.save(nolog=True)
+	if (not nolog): log(f'{c}' if (raw) else f'Exit: {c}' if (c and type(c) == str or hasattr(c, 'args') and c.args) else 'Exit.')
 	try: sys.exit(int(bool(c)) if (code is not None) else code)
-	finally: log(raw=True)
+	finally:
+		if (not nolog): log(raw=True)
 
 def _S(x=None):
 		ex = None
@@ -388,7 +407,7 @@ class Stuple(Slist): pass # TODO
 
 class Sint(S, int):
 	def __len__(self):
-		return S(math.floor(math.log10(abs(self) or 10)))
+		return Sint(math.log10(abs(self) or 10))
 	def constrain(self, lb, ub):
 		return S(constrain(self, lb, ub))
 	def format(self, char=' '):
@@ -483,4 +502,4 @@ if (__name__ == '__main__'):
 	log('\r\033[K\033[0mWhy\033[0;2m are u trying to run me?! It \033[0;93mtickles\033[0;2m!..\033[0m', raw=True)
 else: logimported()
 
-# by Sdore, 2018
+# by Sdore, 2019
