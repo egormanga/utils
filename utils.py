@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# Utils lib v0.7
+# Utils lib v0.8
 
 """ Sdore's Utils
 
@@ -37,7 +37,7 @@ def Simport(x):
 	try: globals()[x[-1]] = __import__(x[0])
 	except ImportError: globals()[x[-1]] = NonExistentModule(x[0])
 
-for i in ('io', 'os', 're', 'sys', 'base64', 'copy', 'dill', 'glob', 'math', 'time', 'queue', 'locale', 'random', 'regex', 'select', 'signal', 'shutil', 'getpass', 'inspect', 'argparse', 'datetime', 'requests', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
+for i in ('io', 'os', 're', 'sys', 'base64', 'copy', 'dill', 'glob', 'math', 'time', 'queue', 'locale', 'random', 'regex', 'select', 'signal', 'shutil', 'string', 'getpass', 'inspect', 'argparse', 'datetime', 'requests', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
 logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
@@ -48,6 +48,7 @@ database = ''
 lastex = [tuple(), int(), -1] # [ex.args, message_id, repeated]
 sendex = None
 loglock = [(0,)]
+_logged_utils_start = None
 
 argparser = argparse.ArgumentParser(conflict_handler='resolve', description='\033[3A', add_help=False)
 argparser.add_argument('-v', action='count', help=argparse.SUPPRESS)
@@ -72,7 +73,8 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 		unlock: [undocumented]
 		nolog: flag, force suppress printing to stderr.
 	"""
-	global loglock
+	global loglock, _logged_utils_start
+	if (isinstance(_logged_utils_start, tuple)): _logged_utils_start, _logstateargs = True, _logged_utils_start; logstart('Utils'); logstate(*_logstateargs)
 	_l, _x = map(copy.copy, (l, x))
 	if (l is None): l = ''
 	if (type(l) is not int): l, x = None, (l, *x)
@@ -94,8 +96,16 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
 def dlog(*args, **kwargs): parseargs(kwargs, ll=' \033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m'); return log(*args, **kwargs)
 def logdumb(**kwargs): return log(raw=True, end='', **kwargs)
-def logstart(x): """ from utils import *; logstart(name) """; log(x+'\033[0m...', end=' '); locklog()
-def logstate(state, x=''): log(state+(': '+str(x))*bool(str(x))+'\033[0m', raw=True, unlock=loglock[-1][0])
+def logstart(x):
+	""" from utils import *; logstart(name) """
+	global _logged_utils_start
+	if (_logged_utils_start is None): _logged_utils_start = False; return
+	log(x+'\033[0m...', end=' ', nolog=(x == 'Utils'))
+	locklog()
+def logstate(state, x=''):
+	global _logged_utils_start
+	if (_logged_utils_start is False): _logged_utils_start = (state, x); return
+	log(state+(': '+str(x))*bool(str(x))+'\033[0m', raw=True, unlock=loglock[-1][0])
 def logstarted(x=''): """ if (__name__ == '__main__'): logstart(); main() """; logstate('\033[94mstarted', x)
 def logimported(x=''): """ if (__name__ != '__main__'): logimported() """; logstate('\033[96mimported', x)
 def logok(x=''): logstate('\033[92mok', x)
@@ -107,6 +117,7 @@ def setloglevel(l): global loglevel; loglevel = l
 def locklog(): loglock.append((loglock[-1][0]+1, list()))
 def unlocklog():
 	while (loglock[-1][0]): logdumb(unlock=loglock[-1][0])
+def setutilsnologimport(): global _logged_utils_start; _logged_utils_start = True
 
 _logged_exceptions = set()
 def exception(ex, once=False, nolog=False):
@@ -136,8 +147,12 @@ def exception(ex, once=False, nolog=False):
 logexception = exception
 
 def raise_(ex):
+	logexception(DeprecationWarning('*** raise_() → unraise() ***'), once=True, nolog=True)
+	raise ex
+def unraise(ex):
+	if (isinstance(ex, BaseException)): return ex
+	elif (not issubclass(ex, BaseException)): raise TypeError
 	try: raise ex
-	except TypeError: return ex
 	except BaseException as ex: return ex
 def reraise(ex):
 	ex.__traceback__ = None
