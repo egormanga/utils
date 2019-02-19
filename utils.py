@@ -43,7 +43,7 @@ def Simport(x):
 	except ImportError: globals()[x[-1]] = NonExistentModule(x[0])
 	_import_times[x[0]] = time.time()-start
 
-for i in ('io', 'os', 're', 'sys', 'base64', 'copy', 'dill', 'glob', 'math', 'time', 'queue', 'locale', 'random', 'regex', 'select', 'signal', 'socket', 'shutil', 'string', 'getpass', 'inspect', 'os.path', 'argparse', 'datetime', 'operator', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
+for i in ('io', 'os', 're', 'sys', 'json', 'base64', 'copy', 'dill', 'glob', 'math', 'time', 'queue', 'locale', 'random', 'regex', 'select', 'signal', 'socket', 'shutil', 'string', 'getpass', 'inspect', 'os.path', 'argparse', 'datetime', 'operator', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
 logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
