@@ -19,8 +19,12 @@ else: logimported()
 """
 __version__ = 0.6
 
+import time
 from .utilsconf import dbg_user_id
 from pprint import pprint, pformat
+
+_import_times = dict()
+def get_import_times(): return _import_times
 
 class NonExistentModule:
 	def __init__(self, name):
@@ -34,10 +38,12 @@ class NonExistentModuleError(ImportError): pass
 
 def Simport(x):
 	x = x.split(' ')
+	start = time.time()
 	try: globals()[x[-1]] = __import__(x[0])
 	except ImportError: globals()[x[-1]] = NonExistentModule(x[0])
+	_import_times[x[0]] = time.time()-start
 
-for i in ('io', 'os', 're', 'sys', 'base64', 'copy', 'dill', 'glob', 'math', 'time', 'queue', 'locale', 'random', 'regex', 'select', 'signal', 'shutil', 'string', 'getpass', 'inspect', 'argparse', 'datetime', 'requests', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
+for i in ('io', 'os', 're', 'sys', 'base64', 'copy', 'dill', 'glob', 'math', 'time', 'queue', 'locale', 'random', 'regex', 'select', 'signal', 'socket', 'shutil', 'string', 'getpass', 'inspect', 'os.path', 'argparse', 'datetime', 'operator', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
 logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
@@ -375,12 +381,12 @@ class Sdict(S, collections.defaultdict):
 		r = self.copy()
 		r[key] = value
 		return r
-	__to_discard__ = set()
+	_to_discard = set()
 	def to_discard(self, x):
-		self.__to_discard__.add(x)
+		self._to_discard.add(x)
 	def discard(self):
-		while (self.__to_discard__):
-			try: self.pop(self.__to_discard__.pop())
+		while (self._to_discard):
+			try: self.pop(self._to_discard.pop())
 			except: pass
 Sdefaultdict = Sdict
 
@@ -408,14 +414,14 @@ class Slist(S, list):
 		l = self.copy()
 		l = l[0] if (len(l) == 1 and isiterable(l[0])) else l
 		return S([i for i in l if (i if (s is None) else i != s)])
-	__to_discard__ = set()
 	def filter(self, t):
 		return S([i for i in self if type(i) == t])
+	_to_discard = set()
 	def to_discard(self, x):
-		self.__to_discard__.add(x)
+		self._to_discard.add(x)
 	def discard(self):
-		while (self.__to_discard__):
-			try: self.pop(self.__to_discard__.pop())
+		while (self._to_discard):
+			try: self.pop(self._to_discard.pop())
 			except: pass
 
 class Stuple(Slist): pass # TODO
