@@ -170,14 +170,9 @@ class _clear:
 	def __repr__(self): self(); return ''
 clear = _clear()
 
-def progress(cv, mv, pv="▏▎▍▌▋▊▉█", fill='░', border='│', print=True): # ░▒▓█ # TODO: REWRITE ME PLS
-	if (len(border) == 1): border *= 2
-	mv = S(mv)
-	p = ("\r\033[K%"+str(len(mv)+1)+"d/%d (%3s%%%%) %c%%s%c") % (cv, mv, min(100, cv*100//mv), *border) # pv[int(cv/mv*100%1*10*len(pv)-1//10)]+ # TODO
-	d = 10**len(S(max(1, int(mv-(os.get_terminal_size()[0]-(len(p)-2))))))
-	p %= pv[7]*(cv//d)+fill*(mv//d-cv//d)
-	if (not print): return p[4:]
-	sys.stderr.write(p); sys.stderr.flush()
+def progress(cv, mv, pv="▏▎▍▌▋▊▉█", fill='░', border='│', prefix='', print=True): # FIXME deprecated
+	logexception(DeprecationWarning('*** progress() → Progress ***'), once=True, nolog=True)
+	return getattr(Progress(mv, chars=pv, border=border, prefix=prefix), 'print' if (print) else 'format')(cv)
 
 class DB:
 	""" All-in-one lightweight database class. """
@@ -236,6 +231,52 @@ def savedb(*args, **kwargs):
 	raise DeprecationWarning()
 def setdbfile(*args, **kwargs):
 	raise DeprecationWarning()
+
+class Progress:
+	def __init__(self, mv, chars=' ▏▎▍▌▋▊▉█', border='│', prefix=''):
+		self.mv, self.chars, self.border, self.prefix = mv, chars, border, prefix
+		self.mv = Sint(self.mv)
+		if (len(self.border) == 1): self.border *= 2
+		self.fstr = f"{self.prefix}%{len(self.mv)+1}d/{self.mv} (%3d%%%%) {self.border[0]}%%s{self.border[1]}"
+		self.printed = bool()
+	def __del__(self):
+		if (self.printed): sys.stderr.write('\n')
+	def format(self, cv, width):
+		r = self.fstr % (cv, cv*100//self.mv)
+		cv = min(self.mv, cv)
+		return r % self.format_bar(cv, self.mv, width-(len(r)-2), chars=self.chars)
+	@staticmethod
+	def format_bar(cv, mv, width, chars=' ▏▎▍▌▋▊▉█'):
+		d = 100/width
+		fp, pp = divmod(cv*100//d, mv)
+		pb = chars[-1]*int(fp) + chars[int(pp/mv * len(chars))]*(cv != mv)
+		return pb+' '*int(100//d-len(pb))
+	def print(self, cv, file=sys.stderr, width=None, flush=True):
+		if (width is None): width = os.get_terminal_size()[0]
+		file.write('\r\033[K'+self.format(cv, width=width))
+		if (flush): file.flush()
+		self.printed = (file == sys.stderr)
+
+def testprogress(n=1000, sleep=0.002):
+	p = Progress(n)
+	for i in range(n+1):
+		p.print(i)
+		time.sleep(sleep)
+	sys.stderr.write('\n')
+
+def progrange(start, stop=None, step=1):
+	if (stop is None): start, stop = 0, start
+	p = Progress(stop-start-1)
+	for i in range(start, stop, step):
+		p.print(i)
+		yield i
+
+def progiter(iterable):
+	try: p = Progress(len(iterable))
+	except TypeError: yield from iterable; return
+	for ii, i in enumerate(iterable):
+		p.print(ii+1)
+		yield i
 
 def validate(l, d, nolog=False):
 	for i in d:
@@ -519,7 +560,7 @@ db = DB()
 logstart('Utils')
 if (__name__ == '__main__'):
 	logstarted()
-	for i in range(100+1): progress(i, 100); time.sleep(0.01)
+	testprogress()
 	log('\r\033[K\033[0mWhy\033[0;2m are u trying to run me?! It \033[0;93mtickles\033[0;2m!..\033[0m', raw=True)
 else: logimported()
 
