@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# Utils lib v0.8
+# Utils lib
 
 """ Sdore's Utils
 
@@ -17,7 +17,6 @@ else: logimported()
 
 # by <AUTHOR>, <YEAR>
 """
-__version__ = 0.6
 
 import time
 from .utilsconf import dbg_user_id
@@ -233,24 +232,34 @@ def setdbfile(*args, **kwargs):
 	raise DeprecationWarning()
 
 class Progress:
-	def __init__(self, mv, chars=' ▏▎▍▌▋▊▉█', border='│', prefix=''):
-		self.mv, self.chars, self.border, self.prefix = mv, chars, border, prefix
+	def __init__(self, mv, chars=' ▏▎▍▌▋▊▉█', border='│', prefix='', add_speed_eta=True):
+		self.mv, self.chars, self.border, self.prefix, self.add_speed_eta = mv, chars, border, prefix, add_speed_eta
 		self.mv = Sint(self.mv)
-		if (len(self.border) == 1): self.border *= 2
-		self.fstr = f"{self.prefix}%{len(self.mv)+1}d/{self.mv} (%3d%%%%) {self.border[0]}%%s{self.border[1]}"
+		self.fstr = self.prefix+'%d/'+str(self.mv)+' (%d%%%s) '
 		self.printed = bool()
+		self.started = None
 	def __del__(self):
 		if (self.printed): sys.stderr.write('\n')
-	def format(self, cv, width):
-		r = self.fstr % (cv, cv*100//self.mv)
-		cv = min(self.mv, cv)
-		return r % self.format_bar(cv, self.mv, width-(len(r)-2), chars=self.chars)
+	def format(self, cv, width, add_speed_eta=None):
+		if (add_speed_eta is None): add_speed_eta = self.add_speed_eta
+		if (self.started is None): self.started = time.time(); add_speed_eta = False
+		r = self.fstr % (cv, cv*100//self.mv, ', '+self.format_speed_eta(cv, self.mv, time.time()-self.started) if (add_speed_eta) else '')
+		return r+self.format_bar(min(self.mv, cv), self.mv, width-len(r), chars=self.chars, border=self.border)
 	@staticmethod
-	def format_bar(cv, mv, width, chars=' ▏▎▍▌▋▊▉█'):
-		d = 100/width
+	def format_bar(cv, mv, width, chars=' ▏▎▍▌▋▊▉█', border='│'):
+		if (len(border) == 1): border *= 2
+		d = 100/(width-2)
 		fp, pp = divmod(cv*100//d, mv)
 		pb = chars[-1]*int(fp) + chars[int(pp/mv * len(chars))]*(cv != mv)
-		return pb+' '*int(100//d-len(pb))
+		return (pb+' '*int(100//d-len(pb))).join(border)
+	@staticmethod
+	def format_speed_eta(cv, mv, elapsed):
+		speed, speed_u = cv/elapsed, 0
+		eta = math.ceil(mv/speed)-elapsed if (speed) else 0
+		eta = ' '.join(reversed(tuple(str(int(i))+'smhd'[ii] for ii, i in enumerate(S([eta%60, eta//60%60, eta//60//60%24, eta//60//60//24]).strip())))) or '?'
+		for i in (60, 60, 24):
+			if (speed < 1): speed *= i; speed_u += 1
+		return '%d/%c, %s ETA' % (speed, 'smhd'[speed_u], eta)
 	def print(self, cv, file=sys.stderr, width=None, flush=True):
 		if (width is None): width = os.get_terminal_size()[0]
 		file.write('\r\033[K'+self.format(cv, width=width))
