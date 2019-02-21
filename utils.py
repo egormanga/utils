@@ -244,14 +244,14 @@ class Progress:
 		if (add_speed_eta is None): add_speed_eta = self.add_speed_eta
 		if (self.started is None): self.started = time.time(); add_speed_eta = False
 		r = self.fstr % (cv, cv*100//self.mv, ', '+self.format_speed_eta(cv, self.mv, time.time()-self.started) if (add_speed_eta) else '')
-		return r+self.format_bar(min(self.mv, cv), self.mv, width-len(r), chars=self.chars, border=self.border)
+		return r+self.format_bar(cv, self.mv, width-len(r), chars=self.chars, border=self.border)
 	@staticmethod
 	def format_bar(cv, mv, width, chars=' ▏▎▍▌▋▊▉█', border='│'):
-		if (len(border) == 1): border *= 2
+		cv = max(0, min(mv, cv))
 		d = 100/(width-2)
-		fp, pp = divmod(cv*100//d, mv)
+		fp, pp = divmod(cv*100/d, mv)
 		pb = chars[-1]*int(fp) + chars[int(pp/mv * len(chars))]*(cv != mv)
-		return (pb+' '*int(100//d-len(pb))).join(border)
+		return border+(pb+' '*int(width-2-len(pb)))+border
 	@staticmethod
 	def format_speed_eta(cv, mv, elapsed):
 		speed, speed_u = cv/elapsed, 0
