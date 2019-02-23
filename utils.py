@@ -169,8 +169,7 @@ class _clear:
 	def __repr__(self): self(); return ''
 clear = _clear()
 
-def progress(cv, mv, pv="▏▎▍▌▋▊▉█", fill='░', border='│', prefix='', print=True): # FIXME deprecated
-	logexception(DeprecationWarning('*** progress() → Progress ***'), once=True, nolog=True)
+def progress(cv, mv, pv="▏▎▍▌▋▊▉█", fill='░', border='│', prefix='', print=True): # TODO: maybe deprecate 🤔
 	return getattr(Progress(mv, chars=pv, border=border, prefix=prefix), 'print' if (print) else 'format')(cv)
 
 class DB:
@@ -216,7 +215,7 @@ class DB:
 		if (backup):
 			try: os.mkdir('backup')
 			except: pass
-			try: shutil.copyfile(self.file.name, time.strftime('backup/%s.db'))
+			try: shutil.copyfile(self.file.name, f"backup/{self.file.name if (hasattr(self.file, 'name')) else ''}_{time.time()}.db")
 			except: pass
 		try: dill.dump(db or {field: self.fields[field][field] for field in self.fields}, self.file)
 		except Exception as ex:
@@ -224,12 +223,6 @@ class DB:
 		else:
 			if (not nolog): logok()
 		self.file.seek(0)
-def loaddb(*args, **kwargs):
-	raise DeprecationWarning()
-def savedb(*args, **kwargs):
-	raise DeprecationWarning()
-def setdbfile(*args, **kwargs):
-	raise DeprecationWarning()
 
 class Progress:
 	def __init__(self, mv, chars=' ▏▎▍▌▋▊▉█', border='│', prefix='', add_speed_eta=True):
@@ -377,12 +370,12 @@ def preeval(f):
 
 class WTFException(Exception): pass
 class TODO(NotImplementedError): pass
+class TEST(BaseException): pass
 
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args)
 
 def setonsignals(f): signal.signal(signal.SIGINT, f); signal.signal(signal.SIGTERM, f)
 
-def tla(s="<mode> <*args>"): raise DeprecationWarning()
 def exit(c=None, code=None, raw=False, nolog=False):
 	sys.stderr.write('\r')
 	unlocklog()
