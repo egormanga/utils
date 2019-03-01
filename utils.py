@@ -182,6 +182,7 @@ class DB:
 	def setfile(self, file):
 		self.file = file
 		if (file is None): return False
+		if ('/' not in file): file = os.path.dirname(os.path.realpath(sys.argv[0]))+'/'+file
 		try: self.file = open(file, 'r+b')
 		except FileNotFoundError: self.file = open(file, 'w+b')
 		return True
