@@ -42,7 +42,7 @@ def Simport(x):
 	except ImportError: globals()[x[-1]] = NonExistentModule(x[0])
 	_import_times[x[0]] = time.time()-start
 
-for i in ('io', 'os', 're', 'sys', 'json', 'base64', 'copy', 'dill', 'glob', 'math', 'time', 'queue', 'locale', 'random', 'regex', 'select', 'signal', 'socket', 'shutil', 'string', 'getpass', 'inspect', 'os.path', 'argparse', 'datetime', 'operator', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
+for i in ('io', 'os', 're', 'sys', 'json', 'base64', 'copy', 'dill', 'glob', 'html', 'math', 'time', 'queue', 'locale', 'random', 'regex', 'select', 'signal', 'socket', 'shutil', 'string', 'getpass', 'inspect', 'os.path', 'argparse', 'datetime', 'operator', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
 logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
@@ -418,8 +418,9 @@ class Sdict(S, collections.defaultdict):
 	def translate(self, table, copy=False, strict=True, keep=True):
 		r = self.copy()
 		for i in table:
-			if (not strict and table[i] not in r): continue
-			if (keep and i not in r): r[i] = (r.get if (copy) else r.pop)(table[i])
+			k, t = table[i] if (isinstance(table[i], (tuple, list))) else (table[i], lambda x: x)
+			if (not strict and k not in r): continue
+			if (keep and i not in r): r[i] = t((r.get if (copy) else r.pop)(k))
 		return S(r)
 	def with_(self, key, value=None):
 		r = self.copy()
@@ -503,10 +504,10 @@ class Sstr(S, str):
 		else: raise ValueError
 	def sjust(self, n, *args, **kwargs):
 		return self.indent(n-len(self), *args, **kwargs)
-	def wrap(self, w, char=' '):
+	def wrap(self, w, char=' ', j='<'):
 		r = self.split('\n')
 		for ii, i in enumerate(r):
-			if (len(i) > w): r.insert(ii+1, i[w:].rjust(w, char)); r[ii] = r[ii][:w]
+			if (len(i) > w): r.insert(ii+1, S(i[w:]).just(w, char, j=j)); r[ii] = r[ii][:w]
 		return S('\n'.join(r))
 	def filter(self, chars):
 		return str().join(i for i in self if i in chars)
