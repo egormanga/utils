@@ -369,6 +369,25 @@ def preeval(f):
         r = f()
         return lambda: r
 
+def dispatch(f):
+	fname = f.__qualname__
+	fsig = inspect.signature(f)
+	_overloaded_functions[fname][tuple(sorted((i[0], i[1].annotation if (isinstance(i[1].annotation, tuple)) else (i[1].annotation,)) for i in fsig.parameters.items()))] = f
+	_overloaded_functions_docstings[fname][fsig] = f.__doc__
+	def overloaded(*args, **kwargs):
+		types = {i: type(kwargs[i]) for i in kwargs}
+		for k, v in _overloaded_functions[fname].items():
+			s = tuple(sorted((Sdict(itertools.zip_longest(dict(k).keys(), tuple(map(type, args)), fillvalue='')) & types).items()))
+			if (len(s) != len(k)): continue
+			k = tuple(i for i in k if i[1] != '')
+			s = tuple(filter(lambda x: x[0] in dict(k), s))
+			if (all(i[1] in j[1] for i, j in zip(s, k) if j[1][0] != inspect._empty)): return v(*args, **kwargs)
+		if (() in _overloaded_functions[fname]): return _overloaded_functions[fname][()](*args, **kwargs)
+		else: raise \
+			TypeError() # TODO: error messages
+	overloaded.__name__, overloaded.__qualname__, overloaded.__module__, overloaded.__doc__, overloaded.__signature__, overloaded.__code__ = f"Overloaded {f.__name__}", f.__qualname__, f.__module__, '\n\n'.join(f.__qualname__+str(sig)+(':\n\b    '+doc if (doc) else '') for sig, doc in _overloaded_functions_docstings[fname].items()), ..., type(overloaded.__code__)(overloaded.__code__.co_argcount, overloaded.__code__.co_kwonlyargcount, overloaded.__code__.co_nlocals, overloaded.__code__.co_stacksize, overloaded.__code__.co_flags, overloaded.__code__.co_code, overloaded.__code__.co_consts, overloaded.__code__.co_names, overloaded.__code__.co_varnames, overloaded.__code__.co_filename, f"<overloaded '{f.__qualname__}'>", overloaded.__code__.co_firstlineno, overloaded.__code__.co_lnotab, overloaded.__code__.co_freevars, overloaded.__code__.co_cellvars)
+	return overloaded
+
 class WTFException(Exception): pass
 class TODO(NotImplementedError): pass
 class TEST(BaseException): pass
@@ -560,6 +579,8 @@ def Sbool(x=bool(), *args, **kwargs): # No way to derive a class from bool
 
 S = _S
 db = DB()
+_overloaded_functions = Sdict(dict)
+_overloaded_functions_docstings = Sdict(dict)
 
 logstart('Utils')
 if (__name__ == '__main__'):
