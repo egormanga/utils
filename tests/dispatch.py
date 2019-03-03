@@ -20,7 +20,7 @@ def f(x: str, y: int): return x+str(y)
 def f(x, y: type(Ellipsis)): return f".{x}."
 
 @dispatch
-def f(x, y: str, z = 123): return str(x)+repr(y)+str(z)
+def f(x, y: str, z=123): return str(x)+repr(y)+str(z)
 
 try: print(f(...))
 except TypeError as ex: e = ex
@@ -34,6 +34,7 @@ def f(x): return 'lol'
 check(f(1), '1')
 check(f('1'), 1)
 check(f('1', 2), '12')
+check(f('1', y=2), '12')
 check(f('asd', ...), '.asd.')
 check(f('asd', y=...), '.asd.')
 check(f('sqs', 'boo'), "sqs'boo'123")

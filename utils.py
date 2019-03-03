@@ -66,7 +66,7 @@ function = type(lambda: None)
 
 def set_dbg_user_id(x): global dbg_user_id; dbg_user_id = x
 
-def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, unlock=0, nolog=False):
+def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, width=80, unlock=0, nolog=False):
 	""" Log anything. Print (formatted with datetime) to stderr and logfile (if set). Should be compatible with builtins.print().
 	Parameters:
 		l (optional): level, must be >= global loglevel to print to stderr rather than only to logfile (or /dev/null).
@@ -84,7 +84,7 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	if (l is None): l = ''
 	if (type(l) is not int): l, x = None, (l, *x)
 	if (x is ()): l, x = 0, (l,)
-	x = 'plog():\n'*bool(format)+sep.join(map(pformat if (format) else str, x))
+	x = 'plog():\n'*bool(format)+sep.join(map((lambda x: pformat(x, width=width)) if (format) else str, x))
 	clearstr = noesc.sub('', str(x))
 	if (tm is None): tm = time.localtime()
 	if (not unlock and loglock[-1][0]): loglock[-1][1].append(((_l, *_x), dict(sep=sep, end=end, raw=raw, tm=tm, nolog=nolog))); return clearstr
@@ -100,6 +100,7 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	return clearstr
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
 def dlog(*args, **kwargs): parseargs(kwargs, ll=' \033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m'); return log(*args, **kwargs)
+def dplog(*args, **kwargs): parseargs(kwargs, format=True); return dlog(*args, **kwargs)
 def logdumb(**kwargs): return log(raw=True, end='', **kwargs)
 def logstart(x):
 	""" from utils import *; logstart(name) """
@@ -372,21 +373,33 @@ def preeval(f):
 def dispatch(f):
 	fname = f.__qualname__
 	fsig = inspect.signature(f)
-	_overloaded_functions[fname][tuple(sorted((i[0], i[1].annotation if (isinstance(i[1].annotation, tuple)) else (i[1].annotation,)) for i in fsig.parameters.items()))] = f
+	_overloaded_functions[fname][tuple(sorted((i[0], (i[1].annotation if (isinstance(i[1].annotation, tuple)) else (i[1].annotation,), i[1].default is not inspect._empty)) for i in fsig.parameters.items()))] = f
 	_overloaded_functions_docstings[fname][fsig] = f.__doc__
+	#plog(1, [(dict(i), '—'*40) for i in _overloaded_functions[fname]], width=60)
 	def overloaded(*args, **kwargs):
-		types = {i: type(kwargs[i]) for i in kwargs}
+		atypes = {i: type(kwargs[i]) for i in kwargs}
 		for k, v in _overloaded_functions[fname].items():
-			s = tuple(sorted((Sdict(itertools.zip_longest(dict(k).keys(), tuple(map(type, args)), fillvalue='')) & types).items()))
-			if (len(s) != len(k)): continue
-			k = tuple(i for i in k if i[1] != '')
-			s = tuple(filter(lambda x: x[0] in dict(k), s))
-			if (all(i[1] in j[1] for i, j in zip(s, k) if j[1][0] != inspect._empty)): return v(*args, **kwargs)
+			if (len(args) > len(k)): continue # excess positional args
+			names = tuple(map(operator.itemgetter(0), k))
+			if (set(kwargs) - set(names[len(args):])): continue # excess keyword args
+			s = Sdict(zip(names, tuple(map(type, args)))) & atypes
+			#dlog(args, kwargs, names, s)
+			#dplog(k)
+			for arg, (name, (types, opt)) in itertools.zip_longest(s, k):
+				if (name != arg):
+					if (not opt): break
+				else:
+					#dlog(arg, s[arg], types)
+					if (not any(t == inspect._empty or issubclass(s[arg], t) for t in types)): break
+			else: return v(*args, **kwargs)
 		if (() in _overloaded_functions[fname]): return _overloaded_functions[fname][()](*args, **kwargs)
 		else: raise \
-			TypeError() # TODO: error messages
-	overloaded.__name__, overloaded.__qualname__, overloaded.__module__, overloaded.__doc__, overloaded.__signature__, overloaded.__code__ = f"Overloaded {f.__name__}", f.__qualname__, f.__module__, '\n\n'.join(f.__qualname__+str(sig)+(':\n\b    '+doc if (doc) else '') for sig, doc in _overloaded_functions_docstings[fname].items()), ..., type(overloaded.__code__)(overloaded.__code__.co_argcount, overloaded.__code__.co_kwonlyargcount, overloaded.__code__.co_nlocals, overloaded.__code__.co_stacksize, overloaded.__code__.co_flags, overloaded.__code__.co_code, overloaded.__code__.co_consts, overloaded.__code__.co_names, overloaded.__code__.co_varnames, overloaded.__code__.co_filename, f"<overloaded '{f.__qualname__}'>", overloaded.__code__.co_firstlineno, overloaded.__code__.co_lnotab, overloaded.__code__.co_freevars, overloaded.__code__.co_cellvars)
+			TypeError(f"Parameters {(*map(type, args), *map(type, kwargs.values()))} doesn't match any of '{fname}' signatures") # TODO: error messages
+	overloaded.__name__, overloaded.__qualname__, overloaded.__module__, overloaded.__doc__, overloaded.__signature__, overloaded.__code__ = f"Overloaded {f.__name__}", f.__qualname__, f.__module__, (_overloaded_functions_docstings[fname][()]+'\n\n' if (() in _overloaded_functions_docstings[fname]) else '')+'\n\n'.join(f.__qualname__+str(sig)+(':\n\b    '+doc if (doc) else '') for sig, doc in _overloaded_functions_docstings[fname].items()), ..., type(overloaded.__code__)(overloaded.__code__.co_argcount, overloaded.__code__.co_kwonlyargcount, overloaded.__code__.co_nlocals, overloaded.__code__.co_stacksize, overloaded.__code__.co_flags, overloaded.__code__.co_code, overloaded.__code__.co_consts, overloaded.__code__.co_names, overloaded.__code__.co_varnames, overloaded.__code__.co_filename, f"<overloaded '{f.__qualname__}'>", overloaded.__code__.co_firstlineno, overloaded.__code__.co_lnotab, overloaded.__code__.co_freevars, overloaded.__code__.co_cellvars)
 	return overloaded
+def dispatch_meta(f):
+	_overloaded_functions_docstings[f.__qualname__][()] = f.__doc__
+	return f
 
 class WTFException(Exception): pass
 class TODO(NotImplementedError): pass
