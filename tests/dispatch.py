@@ -17,7 +17,7 @@ def f(x: str): return int(x)
 def f(x: str, y: int): return x+str(y)
 
 @dispatch
-def f(x, y: type(Ellipsis)): return f".{x}."
+def f(x, b: type(Ellipsis)): return f".{x}."
 
 @dispatch
 def f(x, y: str, z=123): return str(x)+repr(y)+str(z)
@@ -36,7 +36,7 @@ check(f('1'), 1)
 check(f('1', 2), '12')
 check(f('1', y=2), '12')
 check(f('asd', ...), '.asd.')
-check(f('asd', y=...), '.asd.')
+check(f('asd', b=...), '.asd.')
 check(f('sqs', 'boo'), "sqs'boo'123")
 check(f('sqs', 'boo', 219), "sqs'boo'219")
 check(f('sqs', 'boo', z=0), "sqs'boo'0")
