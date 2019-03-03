@@ -375,7 +375,7 @@ def dispatch(f):
 	fsig = inspect.signature(f)
 	_overloaded_functions[fname][tuple((i[0], (i[1].annotation if (isinstance(i[1].annotation, tuple)) else (i[1].annotation,), i[1].default is not inspect._empty)) for i in fsig.parameters.items())] = f
 	_overloaded_functions_docstings[fname][fsig] = f.__doc__
-	plog(1, [(dict(i), '—'*40) for i in _overloaded_functions[fname]], width=60)
+	#plog(1, [(dict(i), '—'*40) for i in _overloaded_functions[fname]], width=60)
 	def overloaded(*args, **kwargs):
 		atypes = {i: type(kwargs[i]) for i in kwargs}
 		for k, v in _overloaded_functions[fname].items():
@@ -383,13 +383,13 @@ def dispatch(f):
 			names = tuple(map(operator.itemgetter(0), k))
 			if (set(kwargs) - set(names[len(args):])): continue # excess keyword args
 			s = Sdict(zip(names, tuple(map(type, args)))) & atypes
-			dlog(args, kwargs, names, s)
-			dplog(k)
+			#dlog(args, kwargs, names, s)
+			#dplog(k)
 			for arg, (name, (types, opt)) in itertools.zip_longest(s, k):
 				if (name != arg):
 					if (not opt): break
 				else:
-					dlog(arg, s[arg], types)
+					#dlog(arg, s[arg], types)
 					if (not any(t == inspect._empty or issubclass(s[arg], t) for t in types)): break
 			else: return v(*args, **kwargs)
 		if (() in _overloaded_functions[fname]): return _overloaded_functions[fname][()](*args, **kwargs)
