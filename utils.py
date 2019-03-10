@@ -42,7 +42,7 @@ def Simport(x):
 	except ImportError: globals()[x[-1]] = NonExistentModule(x[0])
 	_import_times[x[0]] = time.time()-start
 
-for i in ('io', 'os', 're', 'sys', 'json', 'base64', 'copy', 'dill', 'glob', 'html', 'math', 'time', 'queue', 'locale', 'random', 'regex', 'select', 'signal', 'socket', 'shutil', 'string', 'getpass', 'inspect', 'os.path', 'argparse', 'datetime', 'operator', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
+for i in ('io', 'os', 're', 'sys', 'json', 'base64', 'copy', 'dill', 'glob', 'html', 'math', 'time', 'queue', 'locale', 'pickle', 'random', 'regex', 'select', 'signal', 'socket', 'shutil', 'string', 'getpass', 'inspect', 'os.path', 'argparse', 'datetime', 'operator', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
 from pprint import pprint, pformat
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
@@ -273,40 +273,54 @@ _overloaded_functions_docstings = Sdict(dict)
 def dispatch(f):
 	fname = f.__qualname__
 	fsig = inspect.signature(f)
-	params_annotation = tuple((i[0], (i[1].annotation if (isinstance(i[1].annotation, tuple)) else (i[1].annotation,), i[1].default is not inspect._empty)) for i in fsig.parameters.items())
+	params_annotation = tuple((i[0], (None if (i[1].annotation is inspect._empty) else i[1].annotation if (isinstance(i[1].annotation, tuple)) else (i[1].annotation,), i[1].default is not inspect._empty, i[1].kind)) for i in fsig.parameters.items())
 	_overloaded_functions[fname][params_annotation] = f
 	_overloaded_functions_retval[fname][params_annotation] = fsig.return_annotation
 	_overloaded_functions_docstings[fname][fsig] = f.__doc__
-	#plog(1, [(dict(i), '—'*40) for i in _overloaded_functions[fname]], width=60)
+	#dplog([(dict(i), '—'*40) for i in _overloaded_functions[fname]], width=60) # XXX
 	def overloaded(*args, **kwargs):
 		atypes = {i: type(kwargs[i]) for i in kwargs}
 		for k, v in _overloaded_functions[fname].items():
-			if (len(args) > len(k)): continue # excess positional args
-			names = tuple(map(operator.itemgetter(0), k))
-			if (set(kwargs) - set(names[len(args):])): continue # excess keyword args
-			s = Sdict(zip(names, tuple(map(type, args)))) & atypes
-			#dlog(args, kwargs, names, s)
-			#dplog(k)
-			for arg, (name, (types, opt)) in itertools.zip_longest(s, k):
-				if (name != arg):
-					if (not opt): break
-				else:
-					#dlog(arg, s[arg], types)
-					#dlog([t is inspect._empty or issubclass(s[arg], t) for t in types])
-					if (not any(t is inspect._empty or issubclass(s[arg], t) for t in types)): break
-			else: r = v(*args, **kwargs); break
+			i = int()
+			no = True
+			for a in args:
+				if (i >= len(k)): break
+				if (k[i][1][0] is not None and not isinstance(a, k[i][1][0])): break
+				if (k[i][1][2] in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)): i += 1
+			else: no = False
+			if (no): continue
+
+			if (i < len(k) and k[i][1][2] == inspect.Parameter.VAR_POSITIONAL): i += 1
+
+			no = True
+			kw = dict(k[i:])
+			pkw = set()
+			varkw = tuple(filter(lambda x: x[2] == inspect.Parameter.VAR_KEYWORD, kw.values()))
+			for a in kwargs:
+				if (a not in kw):
+					if (not varkw): break
+					ckw = varkw[0]
+				else: ckw = kw[a]
+				if (ckw[0] is not None and not isinstance(kwargs[a], ckw[0])): break
+				pkw.add(a)
+			else: no = False
+			if (no): continue
+			if (not varkw and {i for i in kw if (not kw[i][1])}-pkw): continue
+
+			r = v(*args, **kwargs); break
 		else:
 			if (() in _overloaded_functions[fname]): r = _overloaded_functions[fname][()](*args, **kwargs)
-			else: raise TypeError(f"Parameters {(*map(type, args), *map(type, kwargs.values()))} doesn't match any of '{fname}' signatures")
+			else: raise TypeError(f"Parameters {(*map(type, args), *map(type, kwargs.values()))} doesn't match any of '{fname}' signatures:\n{S(overloaded_format_signatures(fname, f.__qualname__, sep=endl)).indent(2, char=' ')}")
 		retval = _overloaded_functions_retval[fname][k]
 		if (retval is not inspect._empty and not isinstance(r, retval)):
 			raise TypeError(f"Return value of type {type(r)} doesn't match return annotation of appropriate '{fname}' signature")
 		return r
-	overloaded.__name__, overloaded.__qualname__, overloaded.__module__, overloaded.__doc__, overloaded.__signature__, overloaded.__code__ = f"Overloaded {f.__name__}", f.__qualname__, f.__module__, (_overloaded_functions_docstings[fname][()]+'\n\n' if (() in _overloaded_functions_docstings[fname]) else '')+'\n\n'.join(f.__qualname__+str(sig)+(':\n\b    '+doc if (doc) else '') for sig, doc in _overloaded_functions_docstings[fname].items()), ..., type(overloaded.__code__)(overloaded.__code__.co_argcount, overloaded.__code__.co_kwonlyargcount, overloaded.__code__.co_nlocals, overloaded.__code__.co_stacksize, overloaded.__code__.co_flags, overloaded.__code__.co_code, overloaded.__code__.co_consts, overloaded.__code__.co_names, overloaded.__code__.co_varnames, overloaded.__code__.co_filename, f"<overloaded '{f.__qualname__}'>", overloaded.__code__.co_firstlineno, overloaded.__code__.co_lnotab, overloaded.__code__.co_freevars, overloaded.__code__.co_cellvars) # it's soooooo long :D
+	overloaded.__name__, overloaded.__qualname__, overloaded.__module__, overloaded.__doc__, overloaded.__signature__, overloaded.__code__ = f"Overloaded {f.__name__}", f.__qualname__, f.__module__, (_overloaded_functions_docstings[fname][()]+'\n\n' if (() in _overloaded_functions_docstings[fname]) else '')+overloaded_format_signatures(fname, f.__qualname__), ..., type(overloaded.__code__)(overloaded.__code__.co_argcount, overloaded.__code__.co_kwonlyargcount, overloaded.__code__.co_nlocals, overloaded.__code__.co_stacksize, overloaded.__code__.co_flags, overloaded.__code__.co_code, overloaded.__code__.co_consts, overloaded.__code__.co_names, overloaded.__code__.co_varnames, overloaded.__code__.co_filename, f"<overloaded '{f.__qualname__}'>", overloaded.__code__.co_firstlineno, overloaded.__code__.co_lnotab, overloaded.__code__.co_freevars, overloaded.__code__.co_cellvars) # it's soooooo long :D
 	return overloaded
 def dispatch_meta(f):
 	_overloaded_functions_docstings[f.__qualname__][()] = f.__doc__
 	return f
+def overloaded_format_signatures(fname, qualname, sep='\n\n'): return sep.join(Sstr().join((qualname, sig, ':\n\b    '+doc if (doc) else '')) for sig, doc in _overloaded_functions_docstings[fname].items())
 
 logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
 noesc = re.compile(r'\033\[?[0-?]*[ -/]*[@-~]?')
@@ -388,7 +402,9 @@ def exception(ex, once=False, nolog=False):
 	exc = repr(ex).split('(')[0]
 	e = log(('\033[91mCaught ' if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+f"{exc}{(' on line '+'→'.join(map(lambda x: str(x[1]), traceback.walk_tb(ex.__traceback__)))).rstrip(' on line')}\033[0m{(': '+str(ex))*bool(str(ex))}")
 	if (nolog): return
-	for i in _exc_handlers: i(e, ex)
+	for i in _exc_handlers:
+		try: i(e, ex)
+		except Exception: pass
 logexception = exception
 
 @dispatch
@@ -408,9 +424,6 @@ class _clear:
 	def __repr__(self):
 		self(); return ''
 clear = _clear()
-
-def progress(cv, mv, pv="▏▎▍▌▋▊▉█", fill='░', border='│', prefix='', print=True): # TODO: maybe deprecate 🤔
-	return getattr(Progress(mv, chars=pv, border=border, prefix=prefix), 'print' if (print) else 'format')(cv)
 
 class DB:
 	""" All-in-one lightweight database class. """
@@ -473,10 +486,12 @@ class DB:
 		self.file.seek(0)
 db = DB()
 
+def progress(cv, mv, pv="▏▎▍▌▋▊▉█", fill='░', border='│', prefix='', print=True): # TODO: maybe deprecate 🤔
+	return getattr(Progress(mv, chars=pv, border=border, prefix=prefix), 'print' if (print) else 'format')(cv)
+
 class Progress:
-	def __init__(self, mv, chars=' ▏▎▍▌▋▊▉█', border='│', prefix='', add_speed_eta=True):
+	def __init__(self, mv=-1, chars=' ▏▎▍▌▋▊▉█', border='│', prefix='', add_speed_eta=True):
 		self.mv, self.chars, self.border, self.prefix, self.add_speed_eta = mv, chars, border, prefix, add_speed_eta
-		self.mv = Sint(self.mv)
 		self.fstr = self.prefix+'%d/'+str(self.mv)+' (%d%%%s) '
 		self.printed = bool()
 		self.started = None
@@ -487,6 +502,7 @@ class Progress:
 	def format(self, cv, width, add_speed_eta=None):
 		if (add_speed_eta is None): add_speed_eta = self.add_speed_eta
 		if (self.started is None): self.started = time.time(); add_speed_eta = False
+		if (not self.mv): self.mv = -1
 		r = self.fstr % (cv, cv*100//self.mv, ', '+self.format_speed_eta(cv, self.mv, time.time()-self.started) if (add_speed_eta) else '')
 		return r+self.format_bar(cv, self.mv, width-len(r), chars=self.chars, border=self.border)
 
@@ -514,16 +530,34 @@ class Progress:
 		self.printed = (out == sys.stderr)
 
 class ProgressPool:
-	def __init__(self, *p):
+	@dispatch
+	def __init__(self, *p: Progress):
 		self.p = p
+
+	@dispatch
+	def __init__(self, n: int):
+		self.p = (*(Progress() for _ in range(n)),)
 
 	def print(self, *cvs, width=None):
 		self.p[0].print(cvs[0], width=width)
 		for p, cv in zip(self.p[1:], cvs[1:]):
 			sys.stderr.write('\n')
 			p.print(cv, width=width)
-		sys.stderr.write(f"\033[{len(self.p)}A")
+		sys.stderr.write(f"\033[{len(self.p)-1}A")
 		sys.stderr.flush()
+
+class ThreadedProgressPool(ProgressPool, threading.Thread):
+	def __init__(self, *args, width=None, delay=0.01, **kwargs):
+		threading.Thread.__init__(self, daemon=True)
+		super().__init__(*args, **kwargs)
+		self.width, self.delay = width, delay
+		self.stopped = bool()
+		self.cvs = [int()]*len(self.p)
+
+	def run(self):
+		while (not self.stopped):
+			self.print(*self.cvs, width=self.width)
+			time.sleep(self.delay)
 
 def testprogress(n=1000, sleep=0.002):
 	p = Progress(n)

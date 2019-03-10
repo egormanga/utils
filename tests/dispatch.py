@@ -28,13 +28,13 @@ def f(x: type(None)) -> int: return 'aoaoa'
 try: print(f(...))
 except TypeError as ex: e = ex
 else: e = None
-print(repr(e))
+print(e)
 assert e
 
 try: print(f(None))
 except TypeError as ex: e = ex
 else: e = None
-print(repr(e))
+print(e)
 assert e
 
 @dispatch
@@ -59,7 +59,7 @@ check(g('b'), 'bstr')
 try: print(g(None))
 except TypeError as ex: e = ex
 else: e = None
-print(repr(e))
+print(e)
 assert e
 
 @dispatch
@@ -68,8 +68,18 @@ def h(x, y): return True
 try: print(h(1))
 except TypeError as ex: e = ex
 else: e = None
-print(repr(e))
+print(e)
 assert e
+
+@dispatch
+def k(*args): return args
+
+check(k(1, 2), (1, 2))
+
+@dispatch
+def l(*args, **kwargs): return (args, kwargs)
+
+check(l(1, 2, c='asd'), ((1, 2), {'c': 'asd'}))
 
 print('\ndispatch() test ok')
 
