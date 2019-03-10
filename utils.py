@@ -651,7 +651,6 @@ class OStream(_CStream):
 		if (x is endl): self.ofd.flush()
 		return self
 class IOStream(IStream, OStream): pass
-pprint(_overloaded_functions['_CStream.__init__'])
 cin = IStream(sys.stdin)
 cout = OStream(sys.stdout)
 cerr = OStream(sys.stderr)
