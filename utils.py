@@ -291,8 +291,8 @@ def dispatch(f):
 				if (name != arg):
 					if (not opt): break
 				else:
-					dlog(arg, s[arg], types)
-					dlog([t is inspect._empty or issubclass(s[arg], t) for t in types])
+					#dlog(arg, s[arg], types)
+					#dlog([t is inspect._empty or issubclass(s[arg], t) for t in types])
 					if (not any(t is inspect._empty or issubclass(s[arg], t) for t in types)): break
 			else: r = v(*args, **kwargs); break
 		else:
