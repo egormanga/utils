@@ -19,8 +19,6 @@ else: logimported()
 """
 
 import time
-from .utilsconf import dbg_user_id
-from pprint import pprint, pformat
 
 _import_times = dict()
 def get_import_times(): return _import_times
@@ -28,8 +26,10 @@ def get_import_times(): return _import_times
 class NonExistentModule:
 	def __init__(self, name):
 		self.__name__ = name
+
 	def __repr__(self):
 		return f"<nonexistent module '{self.__name__}'>"
+
 	def __getattr__(self, x):
 		raise \
 			NonExistentModuleError(self.__name__)
@@ -43,17 +43,9 @@ def Simport(x):
 	_import_times[x[0]] = time.time()-start
 
 for i in ('io', 'os', 're', 'sys', 'json', 'base64', 'copy', 'dill', 'glob', 'html', 'math', 'time', 'queue', 'locale', 'random', 'regex', 'select', 'signal', 'socket', 'shutil', 'string', 'getpass', 'inspect', 'os.path', 'argparse', 'datetime', 'operator', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
+from pprint import pprint, pformat
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
-logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
-noesc = re.compile(r'\033\[?[0-?]*[ -/]*[@-~]?') # r'\033\[[0-?]*[ -/]*[@-~]'
-logoutput = sys.stderr
-logfile = ''
-database = ''
-lastex = [tuple(), int(), -1] # [ex.args, message_id, repeated]
-sendex = None
-loglock = [(0,)]
-_logged_utils_start = None
 
 argparser = argparse.ArgumentParser(conflict_handler='resolve', description='\033[3A', add_help=False)
 argparser.add_argument('-v', action='count', help=argparse.SUPPRESS)
@@ -62,11 +54,267 @@ cargs, _ = argparser.parse_known_args()
 argparser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
 loglevel = (cargs.v or 0)-(cargs.q or 0)
 
-function = type(lambda: None)
+def isiterable(x):
+	try: iter(x)
+	except TypeError: return False
+	else: return True
+def isnumber(x): return isinstance(x, (int, float))
+def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args)
 
-def set_dbg_user_id(x): global dbg_user_id; dbg_user_id = x
+def _S(x=None):
+		ex = None
+		try: return eval('S'+type(x).__name__)(x) if (not isS(x)) else x
+		except NameError: ex = True
+		if (ex): raise \
+			NotImplementedError("S%s" % type(x).__name__)
+def isS(x): return hasattr(x, '__S__') and x.__S__ is '__S__'
 
-def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, width=80, unlock=0, nolog=False):
+class S: __S__ = '__S__'
+
+class Sdict(S, collections.defaultdict):
+	def __init__(self, *args, **kwargs):
+		args = list(args)
+		if (args and isiterable(args[0])): args.insert(0, None)
+		if (not args): args.insert(0, None)
+		super().__init__(*args, **kwargs)
+
+	def __and__(self, x):
+		r = self.copy(); r.update(x); return S(r)
+
+	def __matmul__(self, item):
+		if (type(item) == dict): return S([i for i in self if all(self.get(i) in item[j] for j in item)])
+		#if (len(item) == 1): return S([self[i].get(item[0]) for i in self])
+		return S([self.get(i) for i in item])
+
+	def __call__(self, *x):
+		return S({i: self.get(i) for i in x})
+
+	def __copy__(self):
+		return Sdict(self.default_factory, self)
+
+	__repr__ = dict.__repr__
+
+	copy = __copy__
+
+	def translate(self, table, copy=False, strict=True, keep=True):
+		r = self.copy()
+		for i in table:
+			k, t = table[i] if (isinstance(table[i], (tuple, list))) else (table[i], lambda x: x)
+			if (not strict and k not in r): continue
+			if (keep and i not in r): r[i] = t((r.get if (copy) else r.pop)(k))
+		return S(r)
+
+	def with_(self, key, value=None):
+		r = self.copy()
+		r[key] = value
+		return r
+
+	_to_discard = set()
+
+	def to_discard(self, x):
+		self._to_discard.add(x)
+
+	def discard(self):
+		while (self._to_discard):
+			try: self.pop(self._to_discard.pop())
+			except: pass
+Sdefaultdict = Sdict
+
+class Slist(S, list):
+	def __matmul__(self, item):
+		if (type(item) == dict): return S([i for i in self if all(i.get(j) in (item[j]) for j in item)])
+		r = S([[(i.get(j) if (hasattr(i, 'get')) else i[j]) for j in item] for i in self])
+		return r.flatten() if (len(item) == 1 and not isiterable(item[0]) or type(item[0]) == str) else r
+
+	def __getitem__(self, x):
+		if (not isiterable(x)): return list.__getitem__(self, x)
+		return S([i for i in self if (type(i) == dict and i.get(x[0]) in x[1:])])
+
+	def __sub__(self, x):
+		l = self.copy()
+		for i in range(len(l)):
+			if (all(l[i][j] == x[j] for j in x)): l.to_discard(i)
+		l.discard()
+		return l
+
+	def copy(self):
+		return S(list.copy(self))
+
+	def group(self, n):
+		return S([(*(j for j in i if (j is not None)),) for i in itertools.zip_longest(*[iter(self)]*n)])
+
+	def flatten(self):
+		return S([j for i in self for j in i])
+
+	def strip(self, s=None):
+		l = self.copy()
+		l = l[0] if (len(l) == 1 and isiterable(l[0])) else l
+		return S([i for i in l if (i if (s is None) else i != s)])
+
+	def filter(self, t):
+		return S([i for i in self if type(i) == t])
+
+	_to_discard = set()
+
+	def to_discard(self, x):
+		self._to_discard.add(x)
+
+	def discard(self):
+		while (self._to_discard):
+			try: self.pop(self._to_discard.pop())
+			except: pass
+
+class Stuple(Slist): pass # TODO
+
+class Sint(S, int):
+	def __len__(self):
+		return Sint(math.log10(abs(self) or 10))
+
+	def constrain(self, lb, ub):
+		return S(constrain(self, lb, ub))
+
+	def format(self, char=' '):
+		return char.join(map(str().join, Slist(str(self)[::-1]).group(3)))[::-1]
+
+class Sstr(S, str):
+	def __and__(self, x):
+		return Sstr().join(i for i in self if i in x)
+
+	def fit(self, l, char='…'):
+		return S(self if (len(self) <= l) else self[:l-1]+char)
+
+	def join(self, l, last=None):
+		l = tuple(map(str, l))
+		return S((str.join(self, l[:-1])+(last or self)+l[-1]) if (len(l) > 1) else l[0] if (l) else '')
+
+	def bool(self, minus_one=True):
+		return bool(self) and self.casefold() not in ('0', 'false', 'no', 'нет', '-1'*(not minus_one))
+
+	def indent(self, n=None, char=None, tab_width=8):
+		if (not self): return self
+		if (n is None): n = tab_width
+		r, n = n < 0, abs(n)
+		if (char is None): char = ('\t'*(n//tab_width)+' '*(n % tab_width)) if (not r) else ' '*n
+		else: char *= n
+		return char+('\n'+char).join(self.split('\n')) if (not r) else (char+'\n').join(self.split('\n'))+char
+
+	def just(self, n, char=' ', j=None):
+		if (j is None): j = '<>'[n>0]; n = abs(n)
+		if (j == '.'): return self.center(n, char)
+		elif (j == '<'): return self.ljust(n, char)
+		elif (j == '>'): return self.rjust(n, char)
+		else: raise ValueError
+
+	def sjust(self, n, *args, **kwargs):
+		return self.indent(n-len(self), *args, **kwargs)
+
+	def wrap(self, w, char=' ', j='<'):
+		r = self.split('\n')
+		for ii, i in enumerate(r):
+			if (len(i) > w): r.insert(ii+1, S(i[w:]).just(w, char, j=j)); r[ii] = r[ii][:w]
+		return S('\n'.join(r))
+
+	def filter(self, chars):
+		return str().join(i for i in self if i in chars)
+
+	def sub(self):
+		return self.translate({
+			ord('0'): '₀',
+			ord('1'): '₁',
+			ord('2'): '₂',
+			ord('3'): '₃',
+			ord('4'): '₄',
+			ord('5'): '₅',
+			ord('6'): '₆',
+			ord('7'): '₇',
+			ord('8'): '₈',
+			ord('9'): '₉'
+		})
+
+	def super(self):
+		return self.translate({
+			ord('0'): '⁰',
+			ord('1'): '¹',
+			ord('2'): '²',
+			ord('3'): '³',
+			ord('4'): '⁴',
+			ord('5'): '⁵',
+			ord('6'): '⁶',
+			ord('7'): '⁷',
+			ord('8'): '⁸',
+			ord('9'): '⁹',
+			ord('.'): '·',
+		})
+
+def Sbool(x=bool(), *args, **kwargs): # No way to derive a class from bool
+	x = S(x)
+	return x.bool(*args, **kwargs) if (hasattr(x, 'bool')) else bool(x)
+
+#class Sprop: # there is no 'prop' type though; DEPRECATED immidiatly after implementing; may be reimplemented someday.
+#	__props__ = set()
+#	def __init__(self, name, v=None):
+#		self.name = name
+#		globals = self.__globals__(1)
+#		globals[self.name] = v if (self.name in self.__props__) else None or globals.get(self.name) or v if (v is not None) else (lambda x: self(x))
+#		self.__props__.add(self.name)
+#	def __set__(self, v):
+#		self.__globals__(2)[self.name] = v
+#	def __repr__(self):
+#		v = self.__globals__(1)[self.name]
+#		return repr(v) if (type(v) != function) else str()
+#	def __globals__(self, d):
+#		return inspect.stack()[d+1][0].f_globals
+
+S = _S
+
+_overloaded_functions = Sdict(dict)
+_overloaded_functions_retval = Sdict(dict)
+_overloaded_functions_docstings = Sdict(dict)
+def dispatch(f):
+	fname = f.__qualname__
+	fsig = inspect.signature(f)
+	params_annotation = tuple((i[0], (i[1].annotation if (isinstance(i[1].annotation, tuple)) else (i[1].annotation,), i[1].default is not inspect._empty)) for i in fsig.parameters.items())
+	_overloaded_functions[fname][params_annotation] = f
+	_overloaded_functions_retval[fname][params_annotation] = fsig.return_annotation
+	_overloaded_functions_docstings[fname][fsig] = f.__doc__
+	#plog(1, [(dict(i), '—'*40) for i in _overloaded_functions[fname]], width=60)
+	def overloaded(*args, **kwargs):
+		atypes = {i: type(kwargs[i]) for i in kwargs}
+		for k, v in _overloaded_functions[fname].items():
+			if (len(args) > len(k)): continue # excess positional args
+			names = tuple(map(operator.itemgetter(0), k))
+			if (set(kwargs) - set(names[len(args):])): continue # excess keyword args
+			s = Sdict(zip(names, tuple(map(type, args)))) & atypes
+			#dlog(args, kwargs, names, s)
+			#dplog(k)
+			for arg, (name, (types, opt)) in itertools.zip_longest(s, k):
+				if (name != arg):
+					if (not opt): break
+				else:
+					dlog(arg, s[arg], types)
+					dlog([t is inspect._empty or issubclass(s[arg], t) for t in types])
+					if (not any(t is inspect._empty or issubclass(s[arg], t) for t in types)): break
+			else: r = v(*args, **kwargs); break
+		else:
+			if (() in _overloaded_functions[fname]): r = _overloaded_functions[fname][()](*args, **kwargs)
+			else: raise TypeError(f"Parameters {(*map(type, args), *map(type, kwargs.values()))} doesn't match any of '{fname}' signatures")
+		retval = _overloaded_functions_retval[fname][k]
+		if (retval is not inspect._empty and not isinstance(r, retval)):
+			raise TypeError(f"Return value of type {type(r)} doesn't match return annotation of appropriate '{fname}' signature")
+		return r
+	overloaded.__name__, overloaded.__qualname__, overloaded.__module__, overloaded.__doc__, overloaded.__signature__, overloaded.__code__ = f"Overloaded {f.__name__}", f.__qualname__, f.__module__, (_overloaded_functions_docstings[fname][()]+'\n\n' if (() in _overloaded_functions_docstings[fname]) else '')+'\n\n'.join(f.__qualname__+str(sig)+(':\n\b    '+doc if (doc) else '') for sig, doc in _overloaded_functions_docstings[fname].items()), ..., type(overloaded.__code__)(overloaded.__code__.co_argcount, overloaded.__code__.co_kwonlyargcount, overloaded.__code__.co_nlocals, overloaded.__code__.co_stacksize, overloaded.__code__.co_flags, overloaded.__code__.co_code, overloaded.__code__.co_consts, overloaded.__code__.co_names, overloaded.__code__.co_varnames, overloaded.__code__.co_filename, f"<overloaded '{f.__qualname__}'>", overloaded.__code__.co_firstlineno, overloaded.__code__.co_lnotab, overloaded.__code__.co_freevars, overloaded.__code__.co_cellvars) # it's soooooo long :D
+	return overloaded
+def dispatch_meta(f):
+	_overloaded_functions_docstings[f.__qualname__][()] = f.__doc__
+	return f
+
+logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
+noesc = re.compile(r'\033\[?[0-?]*[ -/]*[@-~]?')
+logfile = None
+logoutput = sys.stderr
+loglock = [(0,)]
+_logged_utils_start = None
+def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, width=80, unlock=0, nolog=False): # TODO: finally rewrite me as class pls
 	""" Log anything. Print (formatted with datetime) to stderr and logfile (if set). Should be compatible with builtins.print().
 	Parameters:
 		l (optional): level, must be >= global loglevel to print to stderr rather than only to logfile (or /dev/null).
@@ -125,49 +373,40 @@ def unlocklog():
 	while (loglock[-1][0]): logdumb(unlock=loglock[-1][0])
 def setutilsnologimport(): global _logged_utils_start; _logged_utils_start = True
 
+_exc_handlers = set()
+def register_exc_handler(f): _exc_handlers.add(f)
 _logged_exceptions = set()
 def exception(ex, once=False, nolog=False):
-	""" Log an exception. Optionally uses Sdore's api module to send an exception on vk.com.
-	Parameters:
-		ex: exception to log
-		nolog: [undocumented], has no action without Sdore's api module.
+	""" Log an exception.
+	ex: exception to log.
+	nolog: no not call exc_handlers.
 	"""
-	global lastex, sendex
 	if (once):
 		if (repr(ex) in _logged_exceptions): return
 		_logged_exceptions.add(repr(ex))
 	if (type(ex) == type and issubclass(ex, BaseException)): ex = ex()
 	exc = repr(ex).split('(')[0]
 	e = log(('\033[91mCaught ' if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+f"{exc}{(' on line '+'→'.join(map(lambda x: str(x[1]), traceback.walk_tb(ex.__traceback__)))).rstrip(' on line')}\033[0m{(': '+str(ex))*bool(str(ex))}")
-	if (not dbg_user_id or nolog or sendex is ImportError): return
-	if (sendex is None):
-		try: from api import send as sendex
-		except ImportError: sendex = ImportError; return
-	sendexstr = f"{sys.argv[0]}: {e}\n"+str().join(traceback.format_tb(ex.__traceback__)).replace('  ', '⠀') # '⠀' &#10240; U+2800 Braille pattern blank
-	if (ex.args != lastex[0]): lastex = [ex.args, int(), -1]
-	lastex[2] += 1
-	if (lastex[2]): sendexstr += f"(повторено ещё {decline(lastex[2], ('раз', 'раза', 'раз'))})"
-	try: msg = sendex(dbg_user_id, sendexstr, message_id=lastex[1], nolog='force')
-	except: msg = int()
-	if (not lastex[1]): lastex[1] = msg
+	if (nolog): return
+	for i in _exc_handlers: i(e, ex)
 logexception = exception
 
-def raise_(ex):
-	logexception(DeprecationWarning('*** raise_() → unraise() ***'), once=True, nolog=True)
-	raise ex
-def unraise(ex):
+@dispatch
+def raise_(ex: BaseException): raise ex
+@dispatch
+def unraise(ex: (BaseException, type)):
 	if (isinstance(ex, BaseException)): return ex
-	elif (not issubclass(ex, BaseException)): raise TypeError
-	try: raise ex
-	except BaseException as ex: return ex
-def reraise(ex):
-	ex.__traceback__ = None
-	return ex
+	elif (issubclass(ex, BaseException)): return ex()
+	else: raise TypeError
 
 class _clear:
 	""" Clear the terminal. """
-	def __call__(self): print(end='\033c', flush=True)
-	def __repr__(self): self(); return ''
+
+	def __call__(self):
+		print(end='\033c', flush=True)
+
+	def __repr__(self):
+		self(); return ''
 clear = _clear()
 
 def progress(cv, mv, pv="▏▎▍▌▋▊▉█", fill='░', border='│', prefix='', print=True): # TODO: maybe deprecate 🤔
@@ -175,11 +414,13 @@ def progress(cv, mv, pv="▏▎▍▌▋▊▉█", fill='░', border='│', pr
 
 class DB:
 	""" All-in-one lightweight database class. """
+
 	def __init__(self, file=None):
 		self.setfile(file)
 		self.fields = dict()
 		self.setnolog(False)
 		self.setbackup(True)
+
 	def setfile(self, file):
 		self.file = file
 		if (file is None): return False
@@ -187,13 +428,17 @@ class DB:
 		try: self.file = open(file, 'r+b')
 		except FileNotFoundError: self.file = open(file, 'w+b')
 		return True
+
 	def setnolog(self, nolog=True):
 		self.nolog = bool(nolog)
+
 	def setbackup(self, backup):
 		self.backup = bool(backup)
+
 	def register(self, *fields):
 		globals = inspect.stack()[1][0].f_globals
 		for field in fields: self.fields[field] = globals
+
 	def load(self, nolog=None):
 		nolog = (self.nolog if (nolog is None) else nolog)
 		if (not self.file): return
@@ -209,6 +454,7 @@ class DB:
 			if (field in db): self.fields[field][field] = db.get(field)
 			elif (not nolog): log(1, f"Not in DB: {field}")
 		return db
+
 	def save(self, db={}, backup=None, nolog=None):
 		nolog = (self.nolog if (nolog is None) else nolog)
 		backup = (self.backup if (backup is None) else backup)
@@ -225,6 +471,7 @@ class DB:
 		else:
 			if (not nolog): logok()
 		self.file.seek(0)
+db = DB()
 
 class Progress:
 	def __init__(self, mv, chars=' ▏▎▍▌▋▊▉█', border='│', prefix='', add_speed_eta=True):
@@ -233,13 +480,16 @@ class Progress:
 		self.fstr = self.prefix+'%d/'+str(self.mv)+' (%d%%%s) '
 		self.printed = bool()
 		self.started = None
+
 	def __del__(self):
 		if (self.printed): sys.stderr.write('\n')
+
 	def format(self, cv, width, add_speed_eta=None):
 		if (add_speed_eta is None): add_speed_eta = self.add_speed_eta
 		if (self.started is None): self.started = time.time(); add_speed_eta = False
 		r = self.fstr % (cv, cv*100//self.mv, ', '+self.format_speed_eta(cv, self.mv, time.time()-self.started) if (add_speed_eta) else '')
 		return r+self.format_bar(cv, self.mv, width-len(r), chars=self.chars, border=self.border)
+
 	@staticmethod
 	def format_bar(cv, mv, width, chars=' ▏▎▍▌▋▊▉█', border='│'):
 		cv = max(0, min(mv, cv))
@@ -247,6 +497,7 @@ class Progress:
 		fp, pp = divmod(cv*100/d, mv)
 		pb = chars[-1]*int(fp) + chars[int(pp/mv * len(chars))]*(cv != mv)
 		return border+(pb+' '*int(width-2-len(pb)))+border
+
 	@staticmethod
 	def format_speed_eta(cv, mv, elapsed):
 		speed, speed_u = cv/elapsed, 0
@@ -255,18 +506,30 @@ class Progress:
 		for i in (60, 60, 24):
 			if (speed < 1): speed *= i; speed_u += 1
 		return '%d/%c, %s ETA' % (speed, 'smhd'[speed_u], eta)
-	def print(self, cv, file=sys.stderr, width=None, flush=True):
+
+	def print(self, cv, *, out=sys.stderr, width=None, flush=True):
 		if (width is None): width = os.get_terminal_size()[0]
-		file.write('\r\033[K'+self.format(cv, width=width))
-		if (flush): file.flush()
-		self.printed = (file == sys.stderr)
+		out.write('\033[K'+self.format(cv, width=width)+'\r')
+		if (flush): out.flush()
+		self.printed = (out == sys.stderr)
+
+class ProgressPool:
+	def __init__(self, *p):
+		self.p = p
+
+	def print(self, *cvs, width=None):
+		self.p[0].print(cvs[0], width=width)
+		for p, cv in zip(self.p[1:], cvs[1:]):
+			sys.stderr.write('\n')
+			p.print(cv, width=width)
+		sys.stderr.write(f"\033[{len(self.p)}A")
+		sys.stderr.flush()
 
 def testprogress(n=1000, sleep=0.002):
 	p = Progress(n)
 	for i in range(n+1):
 		p.print(i)
 		time.sleep(sleep)
-	sys.stderr.write('\n')
 
 def progrange(start, stop=None, step=1):
 	if (stop is None): start, stop = 0, start
@@ -314,22 +577,12 @@ def frame(x, c=' ', j='.'): # j: {'<', '.', '>'}
 		'\n'.join('│'+c+S(i).just(w, j)+c+'│' for i in x)+'\n'+\
 		'╰'+'─'*(w+2)+'╯'
 
-def defined(x):
-	try: x in inspect.stack()[1][0].f_globals
-	except NameError: return False
-	else: return True
-
-def isiterable(x):
-	try: iter(x)
-	except TypeError: return False
-	else: return True
-
-def isinteger(x): return isinstance(x, (int, float))
-
 def iter_queue(q):
-	while (not q.empty()): yield q.get()
+	while (q.size()): yield q.get()
 
-def pm(x): return -1+2*bool(x)
+function = type(lambda: None)
+
+def pm(x): return 1 if (x) else -1
 def constrain(x, lb, ub):
 	r = min(ub, max(lb, x))
 	assert lb <= r <= ub
@@ -345,24 +598,29 @@ def global_lambda(l): global_lambdas.append(l); return global_lambdas[-1]
 class lc:
 	def __init__(self, lc):
 		self.lc = lc
+
 	def __enter__(self, *args, **kwargs):
 		self.pl = locale.setlocale(locale.LC_ALL)
 		locale.setlocale(locale.LC_ALL, self.lc)
+
 	def __exit__(self, *args, **kwargs):
 		locale.setlocale(locale.LC_ALL, self.pl)
 
 class ll:
 	def __init__(self, ll):
 		self.ll = ll
+
 	def __enter__(self, *args, **kwargs):
 		self.pl = loglevel
 		setloglevel(self.ll)
+
 	def __exit__(self, *args, **kwargs):
 		setloglevel(self.pl)
 
 class classproperty:
 	def __init__(self, f):
 		self.f = f
+
 	def __get__(self, obj, owner):
 		return self.f(owner)
 
@@ -370,43 +628,39 @@ def preeval(f):
         r = f()
         return lambda: r
 
-def dispatch(f):
-	fname = f.__qualname__
-	fsig = inspect.signature(f)
-	_overloaded_functions[fname][tuple((i[0], (i[1].annotation if (isinstance(i[1].annotation, tuple)) else (i[1].annotation,), i[1].default is not inspect._empty)) for i in fsig.parameters.items())] = f
-	_overloaded_functions_docstings[fname][fsig] = f.__doc__
-	#plog(1, [(dict(i), '—'*40) for i in _overloaded_functions[fname]], width=60)
-	def overloaded(*args, **kwargs):
-		atypes = {i: type(kwargs[i]) for i in kwargs}
-		for k, v in _overloaded_functions[fname].items():
-			if (len(args) > len(k)): continue # excess positional args
-			names = tuple(map(operator.itemgetter(0), k))
-			if (set(kwargs) - set(names[len(args):])): continue # excess keyword args
-			s = Sdict(zip(names, tuple(map(type, args)))) & atypes
-			#dlog(args, kwargs, names, s)
-			#dplog(k)
-			for arg, (name, (types, opt)) in itertools.zip_longest(s, k):
-				if (name != arg):
-					if (not opt): break
-				else:
-					#dlog(arg, s[arg], types)
-					if (not any(t == inspect._empty or issubclass(s[arg], t) for t in types)): break
-			else: return v(*args, **kwargs)
-		if (() in _overloaded_functions[fname]): return _overloaded_functions[fname][()](*args, **kwargs)
-		else: raise \
-			TypeError(
-				f"Parameters {(*map(type, args), *map(type, kwargs.values()))} doesn't match any of '{fname}' signatures")
-	overloaded.__name__, overloaded.__qualname__, overloaded.__module__, overloaded.__doc__, overloaded.__signature__, overloaded.__code__ = f"Overloaded {f.__name__}", f.__qualname__, f.__module__, (_overloaded_functions_docstings[fname][()]+'\n\n' if (() in _overloaded_functions_docstings[fname]) else '')+'\n\n'.join(f.__qualname__+str(sig)+(':\n\b    '+doc if (doc) else '') for sig, doc in _overloaded_functions_docstings[fname].items()), ..., type(overloaded.__code__)(overloaded.__code__.co_argcount, overloaded.__code__.co_kwonlyargcount, overloaded.__code__.co_nlocals, overloaded.__code__.co_stacksize, overloaded.__code__.co_flags, overloaded.__code__.co_code, overloaded.__code__.co_consts, overloaded.__code__.co_names, overloaded.__code__.co_varnames, overloaded.__code__.co_filename, f"<overloaded '{f.__qualname__}'>", overloaded.__code__.co_firstlineno, overloaded.__code__.co_lnotab, overloaded.__code__.co_freevars, overloaded.__code__.co_cellvars)
-	return overloaded
-def dispatch_meta(f):
-	_overloaded_functions_docstings[f.__qualname__][()] = f.__doc__
-	return f
+class _CStream: # because I can.
+	@dispatch
+	def __init__(self, fd):
+		self.ifd = self.ofd = fd
+
+	@dispatch
+	def __init__(self, ifd, ofd):
+		self.ifd = ifd
+		self.ofd = ofd
+
+	def __repr__(self):
+		return '\033[F' if (sys.flags.interactive) else super().__repr__()
+class IStream(_CStream):
+	def __rshift__(self, x):
+		globals = inspect.stack()[1][0].f_globals
+		globals[x] = type(globals.get(x, ''))(self.ifd.readline().rstrip('\n')) # obviousity? naaooo
+		return self
+class OStream(_CStream):
+	def __lshift__(self, x):
+		self.ofd.write(str(x))
+		if (x is endl): self.ofd.flush()
+		return self
+class IOStream(IStream, OStream): pass
+pprint(_overloaded_functions['_CStream.__init__'])
+cin = IStream(sys.stdin)
+cout = OStream(sys.stdout)
+cerr = OStream(sys.stderr)
+cio = IOStream(sys.stdin, sys.stdout)
+endl = '\n'
 
 class WTFException(Exception): pass
 class TODO(NotImplementedError): pass
 class TEST(BaseException): pass
-
-def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args)
 
 def setonsignals(f): signal.signal(signal.SIGINT, f); signal.signal(signal.SIGTERM, f)
 
@@ -419,188 +673,10 @@ def exit(c=None, code=None, raw=False, nolog=False):
 	finally:
 		if (not nolog): log(raw=True)
 
-def _S(x=None):
-		ex = None
-		try: return eval('S'+type(x).__name__)(x) if (not isS(x)) else x
-		except NameError: ex = True
-		if (ex): raise \
-			NotImplementedError("S%s" % type(x).__name__)
-def isS(x): return hasattr(x, '__S__') and x.__S__ is '__S__'
-
-class S: __S__ = '__S__'
-	#def __eq__(self, x): return issubclass(type(self), x)
-
-class Sdict(S, collections.defaultdict):
-	def __init__(self, *args, **kwargs):
-		args = list(args)
-		if (args and isiterable(args[0])): args.insert(0, None)
-		if (not args): args.insert(0, None)
-		collections.defaultdict.__init__(self, *args, **kwargs)
-	def __and__(self, x):
-		r = self.copy(); r.update(x); return S(r)
-	def __matmul__(self, item):
-		if (type(item) == dict): return S([i for i in self if all(self.get(i) in item[j] for j in item)])
-		#if (len(item) == 1): return S([self[i].get(item[0]) for i in self])
-		return S([self.get(i) for i in item])
-	def __call__(self, *x):
-		return S({i: self.get(i) for i in x})
-	def __copy__(self):
-		return Sdict(self.default_factory, self)
-	__repr__ = dict.__repr__
-	copy = __copy__
-	def translate(self, table, copy=False, strict=True, keep=True):
-		r = self.copy()
-		for i in table:
-			k, t = table[i] if (isinstance(table[i], (tuple, list))) else (table[i], lambda x: x)
-			if (not strict and k not in r): continue
-			if (keep and i not in r): r[i] = t((r.get if (copy) else r.pop)(k))
-		return S(r)
-	def with_(self, key, value=None):
-		r = self.copy()
-		r[key] = value
-		return r
-	_to_discard = set()
-	def to_discard(self, x):
-		self._to_discard.add(x)
-	def discard(self):
-		while (self._to_discard):
-			try: self.pop(self._to_discard.pop())
-			except: pass
-Sdefaultdict = Sdict
-
-class Slist(S, list):
-	def __matmul__(self, item):
-		if (type(item) == dict): return S([i for i in self if all(i.get(j) in (item[j]) for j in item)])
-		r = S([[(i.get(j) if (hasattr(i, 'get')) else i[j]) for j in item] for i in self])
-		return r.flatten() if (len(item) == 1 and not isiterable(item[0]) or type(item[0]) == str) else r
-	def __getitem__(self, x):
-		if (not isiterable(x)): return list.__getitem__(self, x)
-		return S([i for i in self if (type(i) == dict and i.get(x[0]) in x[1:])])
-	def __sub__(self, x):
-		l = self.copy()
-		for i in range(len(l)):
-			if (all(l[i][j] == x[j] for j in x)): l.to_discard(i)
-		l.discard()
-		return l
-	def copy(self):
-		return S(list.copy(self))
-	def group(self, n):
-		return S([(*(j for j in i if (j is not None)),) for i in itertools.zip_longest(*[iter(self)]*n)])
-	def flatten(self):
-		return S([j for i in self for j in i])
-	def strip(self, s=None):
-		l = self.copy()
-		l = l[0] if (len(l) == 1 and isiterable(l[0])) else l
-		return S([i for i in l if (i if (s is None) else i != s)])
-	def filter(self, t):
-		return S([i for i in self if type(i) == t])
-	_to_discard = set()
-	def to_discard(self, x):
-		self._to_discard.add(x)
-	def discard(self):
-		while (self._to_discard):
-			try: self.pop(self._to_discard.pop())
-			except: pass
-
-class Stuple(Slist): pass # TODO
-
-class Sint(S, int):
-	def __len__(self):
-		return Sint(math.log10(abs(self) or 10))
-	def constrain(self, lb, ub):
-		return S(constrain(self, lb, ub))
-	def format(self, char=' '):
-		return char.join(map(str().join, Slist(str(self)[::-1]).group(3)))[::-1]
-
-class Sstr(S, str):
-	def __and__(self, x):
-		return Sstr().join(i for i in self if i in x)
-	def fit(self, l):
-		return S(self if (len(self) <= l) else self[:l-1]+'…')
-	def join(self, l, last=None):
-		l = tuple(map(str, l))
-		return S((str.join(self, l[:-1])+(last or self)+l[-1]) if (len(l) > 1) else l[0] if (l) else '')
-	def bool(self, minus_one=True):
-		return bool(self) and self.casefold() not in ('0', 'false', 'no', 'нет', '-1'*(not minus_one))
-	def indent(self, n=None, char=None, tab_width=8):
-		if (not self): return self
-		if (n is None): n = tab_width
-		r, n = n < 0, abs(n)
-		if (char is None): char = ('\t'*(n//tab_width)+' '*(n % tab_width)) if (not r) else ' '*n
-		else: char *= n
-		return char+('\n'+char).join(self.split('\n')) if (not r) else (char+'\n').join(self.split('\n'))+char
-	def just(self, n, char=' ', j=None):
-		if (j is None): j = '<>'[n>0]; n = abs(n)
-		if (j == '.'): return self.center(n, char)
-		elif (j == '<'): return self.ljust(n, char)
-		elif (j == '>'): return self.rjust(n, char)
-		else: raise ValueError
-	def sjust(self, n, *args, **kwargs):
-		return self.indent(n-len(self), *args, **kwargs)
-	def wrap(self, w, char=' ', j='<'):
-		r = self.split('\n')
-		for ii, i in enumerate(r):
-			if (len(i) > w): r.insert(ii+1, S(i[w:]).just(w, char, j=j)); r[ii] = r[ii][:w]
-		return S('\n'.join(r))
-	def filter(self, chars):
-		return str().join(i for i in self if i in chars)
-	def sub(self):
-		return self.translate({
-			ord('0'): '₀',
-			ord('1'): '₁',
-			ord('2'): '₂',
-			ord('3'): '₃',
-			ord('4'): '₄',
-			ord('5'): '₅',
-			ord('6'): '₆',
-			ord('7'): '₇',
-			ord('8'): '₈',
-			ord('9'): '₉'
-		})
-	def super(self):
-		return self.translate({
-			ord('0'): '⁰',
-			ord('1'): '¹',
-			ord('2'): '²',
-			ord('3'): '³',
-			ord('4'): '⁴',
-			ord('5'): '⁵',
-			ord('6'): '⁶',
-			ord('7'): '⁷',
-			ord('8'): '⁸',
-			ord('9'): '⁹',
-			ord('.'): '·',
-		})
-
-def Sbool(x=bool(), *args, **kwargs): # No way to derive a class from bool
-	x = S(x)
-	return x.bool(*args, **kwargs) if (hasattr(x, 'bool')) else bool(S(x))
-
-#class Sprop: # there is no 'prop' type though; DEPRECATED immidiatly after implementing; may be reimplemented someday.
-#	__props__ = set()
-#	def __init__(self, name, v=None):
-#		self.name = name
-#		globals = self.__globals__(1)
-#		globals[self.name] = v if (self.name in self.__props__) else None or globals.get(self.name) or v if (v is not None) else (lambda x: self(x))
-#		self.__props__.add(self.name)
-#	def __set__(self, v):
-#		self.__globals__(2)[self.name] = v
-#	def __repr__(self):
-#		v = self.__globals__(1)[self.name]
-#		return repr(v) if (type(v) != function) else str()
-#	def __globals__(self, d):
-#		return inspect.stack()[d+1][0].f_globals
-
-S = _S
-db = DB()
-_overloaded_functions = Sdict(dict)
-_overloaded_functions_docstings = Sdict(dict)
-
 logstart('Utils')
 if (__name__ == '__main__'):
-	logstarted()
 	testprogress()
-	log('\r\033[K\033[0mWhy\033[0;2m are u trying to run me?! It \033[0;93mtickles\033[0;2m!..\033[0m', raw=True)
+	log('\033[0mWhy\033[0;2m are u trying to run me?! It \033[0;93mtickles\033[0;2m!..\033[0m', raw=True)
 else: logimported()
 
 # by Sdore, 2019

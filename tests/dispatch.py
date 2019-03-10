@@ -8,21 +8,30 @@ def check(v, s):
 	assert v == s
 
 @dispatch
-def f(x: int): return str(x)
+def f(x: int) -> str: return str(x)
 
 @dispatch
-def f(x: str): return int(x)
+def f(x: str) -> int: return int(x)
 
 @dispatch
-def f(x: str, y: int): return x+str(y)
+def f(x: str, y: int) -> str: return x+str(y)
 
 @dispatch
-def f(x, b: type(Ellipsis)): return f".{x}."
+def f(x, b: type(Ellipsis)) -> (int, str): return f".{x}."
 
 @dispatch
-def f(x, y: str, z=123): return str(x)+repr(y)+str(z)
+def f(x, y: str, z=123) -> str: return str(x)+repr(y)+str(z)
+
+@dispatch
+def f(x: type(None)) -> int: return 'aoaoa'
 
 try: print(f(...))
+except TypeError as ex: e = ex
+else: e = None
+print(repr(e))
+assert e
+
+try: print(f(None))
 except TypeError as ex: e = ex
 else: e = None
 print(repr(e))
