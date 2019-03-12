@@ -42,7 +42,7 @@ def Simport(x):
 	except ImportError: globals()[x[-1]] = NonExistentModule(x[0])
 	_import_times[x[0]] = time.time()-start
 
-for i in ('io', 'os', 're', 'sys', 'json', 'base64', 'copy', 'dill', 'glob', 'html', 'math', 'time', 'queue', 'locale', 'pickle', 'random', 'regex', 'select', 'signal', 'socket', 'shutil', 'string', 'getpass', 'inspect', 'os.path', 'argparse', 'datetime', 'operator', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
+for i in ('io', 'os', 're', 'sys', 'json', 'base64', 'copy', 'dill', 'glob', 'html', 'math', 'time', 'queue', 'locale', 'pickle', 'random', 'regex', 'select', 'signal', 'socket', 'shutil', 'string', 'typing', 'getpass', 'inspect', 'os.path', 'argparse', 'datetime', 'operator', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
 from pprint import pprint, pformat
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
@@ -54,10 +54,9 @@ cargs, _ = argparser.parse_known_args()
 argparser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
 loglevel = (cargs.v or 0)-(cargs.q or 0)
 
-def isiterable(x):
-	try: iter(x)
-	except TypeError: return False
-	else: return True
+endl = '\n'
+
+def isiterable(x): return isinstance(x, typing.Iterable)
 def isnumber(x): return isinstance(x, (int, float))
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args)
 
@@ -267,25 +266,41 @@ def Sbool(x=bool(), *args, **kwargs): # No way to derive a class from bool
 
 S = _S
 
+class DispatchTypeError(TypeError): pass
+class DispatchTypes(tuple): pass
+def dispatch_unpack_typedef(t):
+	if (isinstance(t, DispatchTypes)): return (*(dispatch_unpack_typedef(i) for i in t),)
+	if (isinstance(t, typing.GenericMeta)): return t._subs_tree()
+	return (t,) if (t is not None and t is not Ellipsis) else (type(t),)
+def dispatch_typecheck(o, t): # XXX Warning: unpacks all generators!
+	t = dispatch_unpack_typedef(t)
+	if (not t): return o
+	if (not isinstance(o, t[0])): raise DispatchTypeError()
+	if (isiterable(o)):
+		if (not all(dispatch_typecheck(i, DispatchTypes(t[1:])) for i in o)): raise DispatchTypeError()
+	return o
 _overloaded_functions = Sdict(dict)
 _overloaded_functions_retval = Sdict(dict)
 _overloaded_functions_docstings = Sdict(dict)
 def dispatch(f):
 	fname = f.__qualname__
 	fsig = inspect.signature(f)
-	params_annotation = tuple((i[0], (None if (i[1].annotation is inspect._empty) else i[1].annotation if (isinstance(i[1].annotation, tuple)) else (i[1].annotation,), i[1].default is not inspect._empty, i[1].kind)) for i in fsig.parameters.items())
+	params_annotation = tuple((i[0], (None if (i[1].annotation is inspect._empty) else i[1].annotation, i[1].default is not inspect._empty, i[1].kind)) for i in fsig.parameters.items())
 	_overloaded_functions[fname][params_annotation] = f
 	_overloaded_functions_retval[fname][params_annotation] = fsig.return_annotation
 	_overloaded_functions_docstings[fname][fsig] = f.__doc__
 	#dplog([(dict(i), '—'*40) for i in _overloaded_functions[fname]], width=60) # XXX
 	def overloaded(*args, **kwargs):
-		atypes = {i: type(kwargs[i]) for i in kwargs}
+		args = list(args)
 		for k, v in _overloaded_functions[fname].items():
+			#dplog(k)
 			i = int()
 			no = True
-			for a in args:
+			for ii, a in enumerate(args):
 				if (i >= len(k)): break
-				if (k[i][1][0] is not None and not isinstance(a, k[i][1][0])): break
+				if (k[i][1][0] is not None):
+					try: args[ii] = dispatch_typecheck(a, k[i][1][0])
+					except DispatchTypeError: break
 				if (k[i][1][2] in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)): i += 1
 			else: no = False
 			if (no): continue
@@ -301,7 +316,9 @@ def dispatch(f):
 					if (not varkw): break
 					ckw = varkw[0]
 				else: ckw = kw[a]
-				if (ckw[0] is not None and not isinstance(kwargs[a], ckw[0])): break
+				if (ckw[0] is not None):
+					try: kwargs[a] = dispatch_typecheck(kwargs[a], ckw[0])
+					except DispatchTypeError: break
 				pkw.add(a)
 			else: no = False
 			if (no): continue
@@ -689,7 +706,6 @@ cin = IStream(sys.stdin)
 cout = OStream(sys.stdout)
 cerr = OStream(sys.stderr)
 cio = IOStream(sys.stdin, sys.stdout)
-endl = '\n'
 
 class WTFException(Exception): pass
 class TODO(NotImplementedError): pass

@@ -1,11 +1,16 @@
 #!/usr/bin/python3
 # Utils lib dispatch() test
 
+import typing
 from utils.nolog import dispatch
 
 def check(v, s):
 	print(repr(v))
 	assert v == s
+
+def checkex(ex):
+	print(f"{type(ex).__name__}: {ex}")
+	assert ex
 
 @dispatch
 def f(x: int) -> str: return str(x)
@@ -28,14 +33,12 @@ def f(x: type(None)) -> int: return 'aoaoa'
 try: print(f(...))
 except TypeError as ex: e = ex
 else: e = None
-print(e)
-assert e
+checkex(e)
 
 try: print(f(None))
 except TypeError as ex: e = ex
 else: e = None
-print(e)
-assert e
+checkex(e)
 
 @dispatch
 def f(x): return 'lol'
@@ -59,8 +62,7 @@ check(g('b'), 'bstr')
 try: print(g(None))
 except TypeError as ex: e = ex
 else: e = None
-print(e)
-assert e
+checkex(e)
 
 @dispatch
 def h(x, y): return True
@@ -68,8 +70,7 @@ def h(x, y): return True
 try: print(h(1))
 except TypeError as ex: e = ex
 else: e = None
-print(e)
-assert e
+checkex(e)
 
 @dispatch
 def k(*args): return args
@@ -80,6 +81,25 @@ check(k(1, 2), (1, 2))
 def l(*args, **kwargs): return (args, kwargs)
 
 check(l(1, 2, c='asd'), ((1, 2), {'c': 'asd'}))
+
+@dispatch
+def m(x: typing.List[int]): return str(x)
+
+@dispatch
+def m(x: typing.List[str]): return repr(x)
+
+try: print(m([None]))
+except TypeError as ex: e = ex
+else: e = None
+checkex(e)
+
+check(m([1, 2, 3]), '[1, 2, 3]')
+check(m(['a', 'b']), "['a', 'b']")
+
+try: print(m([1, 2, '3']))
+except TypeError as ex: e = ex
+else: e = None
+checkex(e)
 
 print('\ndispatch() test ok')
 
