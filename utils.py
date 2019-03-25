@@ -93,11 +93,11 @@ def isnumber(x): return isinstance(x, (int, float))
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args)
 
 def S(x=None):
-		ex = None
-		try: return eval('S'+type(x).__name__)(x) if (not isinstance(x, Stype)) else x
-		except NameError: ex = True
-		if (ex): raise \
-			NotImplementedError("S%s" % type(x).__name__)
+	ex = None
+	try: return eval('S'+type(x).__name__)(x) if (not isinstance(x, Stype)) else x
+	except NameError: ex = True
+	if (ex): raise \
+		NotImplementedError("S%s" % type(x).__name__)
 
 class Stype: pass
 
@@ -280,8 +280,14 @@ def Sbool(x=bool(), *args, **kwargs): # No way to derive a class from bool
 	x = S(x)
 	return x.bool(*args, **kwargs) if (hasattr(x, 'bool')) else bool(x)
 
-def dispatch_typecheck(o, t):
-	return t is None or isinstance(o, typing_inspect.get_origin(t) or t) and (all(dispatch_typecheck(i, typing_inspect.get_args(t)) for i in o) if (isinstance(o, typing.Sequence) and not isinstance(o, str)) else True)
+class DispatchFillValue: pass
+def dispatch_typecheck(o, t): #return t is None or isinstance(o, typing_inspect.get_constraints(t) if (isinstance(t, typing.TypeVar)) else typing_inspect.get_origin(t) or t) and ((all(itertools.starmap(dispatch_typecheck, zip(o, t)))) if (isinstance(o, typing.Tuple)) else all(dispatch_typecheck(i, typing_inspect.get_args(t)[0]) for i in o) if (isinstance(o, typing.Sequence) and not isinstance(o, str)) else True)
+	if (t is None or t is inspect._empty): return True
+	if (isinstance(o, DispatchFillValue) or isinstance(t, DispatchFillValue)): return False
+	if (not isinstance(o, (typing_inspect.get_constraints(t) or type(o)) if (isinstance(t, typing.TypeVar)) else typing_inspect.get_origin(t) or t)): return False
+	if (isinstance(o, typing.Tuple) and issubclass(typing_inspect.get_origin(t), typing.Tuple) and typing_inspect.get_args(t) and not all(itertools.starmap(dispatch_typecheck, itertools.zip_longest(o, typing_inspect.get_args(t), fillvalue=DispatchFillValue())))): return False
+	if (isinstance(o, typing.Iterable) and not isinstance(o, typing.Tuple) and not isinstance(o, str) and typing_inspect.get_args(t) and not all(dispatch_typecheck(i, typing_inspect.get_args(t)[0]) for i in o)): return False
+	return True
 _overloaded_functions = Sdict(dict)
 _overloaded_functions_retval = Sdict(dict)
 _overloaded_functions_docstings = Sdict(dict)
@@ -574,7 +580,7 @@ class Progress:
 	def format_speed_eta(cv, mv, elapsed):
 		speed, speed_u = cv/elapsed, 0
 		eta = math.ceil(mv/speed)-elapsed if (speed) else 0
-		eta = ' '.join(reversed(tuple(str(int(i))+'smhd'[ii] for ii, i in enumerate(S([eta%60, eta//60%60, eta//60//60%24, eta//60//60//24]).strip())))) or '?'
+		eta = ' '.join(reversed(tuple(str(int(i))+'smhd'[ii] for ii, i in enumerate(S([eta%60, eta//60%60, eta//60//60%24, eta//60//60//24]).strip())))) if (eta > 0) else '?'
 		for i in (60, 60, 24):
 			if (speed < 1): speed *= i; speed_u += 1
 		return '%d/%c, %s ETA' % (speed, 'smhd'[speed_u], eta)
@@ -588,24 +594,42 @@ class Progress:
 class ProgressPool:
 	@dispatch
 	def __init__(self, *p: Progress):
-		self.p = p
+		self.p = list(p)
+		self.ranges = list()
+
+	@dispatch
+	def __init__(self, n: int):
+		self.__init__(*(Progress() for _ in range(n)))
 
 	def __del__(self):
 		for i in self.p: i.printed = False
 		sys.stderr.write('\033[J')
 		sys.stderr.flush()
 
-	@dispatch
-	def __init__(self, n: int):
-		self.p = (*(Progress() for _ in range(n)),)
-
 	def print(self, *cvs, width=None):
-		self.p[0].print(cvs[0], width=width)
-		for p, cv in zip(self.p[1:], cvs[1:]):
-			sys.stderr.write('\n')
+		ii = None
+		for ii, (p, cv) in enumerate(zip(self.p, cvs)):
+			if (ii): sys.stderr.write('\n')
 			p.print(cv, width=width)
-		sys.stderr.write(f"\033[{len(self.p)-1}A")
+		if (ii): sys.stderr.write(f"\033[{ii}A")
 		sys.stderr.flush()
+
+	def range(self, start, stop=None, step=1):
+		if (stop is None): start, stop = 0, start
+		n = len(self.ranges)
+		self.ranges.append(int())
+		if (n == len(self.p)): self.p.append(Progress())
+		self.p[n].mv = stop-start
+		for i in range(start, stop, step):
+			self.ranges[n] = i-start
+			if (n == len(self.p)-1): self.print(*self.ranges)
+			yield i
+		self.ranges.pop()
+
+	@dispatch
+	def iter(self, iterable: typing.Iterable):
+		l = tuple(iterable)
+		yield from (l[i] for i in self.range(len(l)))
 
 	def done(self, width=None):
 		self.print(*(i.mv for i in self.p), width=width)
@@ -617,6 +641,7 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 		self.width, self.delay = width, delay
 		self.stopped = bool()
 		self.cvs = [int()]*len(self.p)
+		self.ranges = int()
 
 	def run(self):
 		while (not self.stopped):
@@ -625,29 +650,40 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 			unlocklog()
 			time.sleep(self.delay)
 
+	def range(self, start, stop=None, step=1):
+		if (stop is None): start, stop = 0, start
+		n = self.ranges
+		self.ranges += 1
+		if (n == len(self.p)):
+			self.p.append(Progress())
+			self.cvs.append(int())
+		self.p[n].mv = stop-start
+		for i in range(start, stop, step):
+			self.cvs[n] = i-start
+			yield i
+		self.ranges -= 1
+
 	def stop(self):
 		self.stopped = True
 		self.join()
+
+def progrange(start, stop=None, step=1):
+	if (stop is None): start, stop = 0, start
+	p = Progress(stop-start)
+	for i in range(start, stop, step):
+		p.print(i-start)
+		yield i
+
+@dispatch
+def progiter(iterable: typing.Iterable):
+	l = tuple(iterable)
+	yield from (l[i] for i in progrange(len(l)))
 
 def testprogress(n=1000, sleep=0.002):
 	p = Progress(n)
 	for i in range(n+1):
 		p.print(i)
 		time.sleep(sleep)
-
-def progrange(start, stop=None, step=1):
-	if (stop is None): start, stop = 0, start
-	p = Progress(stop-start-1)
-	for i in range(start, stop, step):
-		p.print(i)
-		yield i
-
-def progiter(iterable):
-	try: p = Progress(len(iterable))
-	except TypeError: yield from iterable; return
-	for ii, i in enumerate(iterable):
-		p.print(ii+1)
-		yield i
 
 class NodesTree:
 	chars = '┌├└─│╾╼'

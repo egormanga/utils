@@ -2,7 +2,7 @@
 # Utils lib dispatch() test
 
 import typing
-from utils.nolog import S, log, dispatch
+from utils.nolog import S, log, dispatch, dispatch_typecheck
 
 def check(v, s):
 	print(repr(v))
@@ -117,6 +117,8 @@ class SubTest(Test):
 t = SubTest()
 check(t.f('a'), "<class 'str'> a")
 check(t.f(0), 'This is an integer: 0 !')
+
+assert dispatch_typecheck(('  ', 7), typing.Tuple[str, int])
 
 log('dispatch() test ok\n')
 

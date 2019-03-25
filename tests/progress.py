@@ -2,35 +2,26 @@
 # Utils lib ProgressPool test
 
 import time
-from utils.nolog import log, Progress, ProgressPool, ThreadedProgressPool
+from utils.nolog import log, ProgressPool, ThreadedProgressPool
 
-pp = ProgressPool(
-	Progress(2),
-	Progress(3),
-	Progress(2000),
-)
-
-for i in range(2):
-	for j in range(3):
-		for k in range(2000):
-			pp.print(i, j, k)
-
-pp.done()
+pp = ProgressPool()
+for i in pp.range(2+1):
+	for j in pp.range(3+1):
+		for k in pp.range(2000+1):
+			pass
 time.sleep(1)
 
-pp = ThreadedProgressPool(2)
-pp.p[0].mv = 100
+pp = ThreadedProgressPool()
 pp.start()
-
-for i in range(50, 100):
-	pp.cvs[0] = i+1
-	pp.p[1].mv = i
-	for j in range(i):
-		pp.cvs[1] = j+1
+for i in pp.range(50, 100+1):
+	for j in pp.range(i+1):
 		time.sleep(0.001)
-
 pp.stop()
 time.sleep(0.5)
+
+pp = ProgressPool()
+for i in pp.iter((1, 2, 3, 4)):
+	time.sleep(0.2)
 del pp
 
 log('Progress test ok\n')

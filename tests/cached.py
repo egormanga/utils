@@ -1,7 +1,8 @@
 #!/usr/bin/python3
 # Utils lib cached*() test
 
-from utils.nolog import log, cachedfunction, cachedproperty
+import time
+from utils.nolog import log, preeval, cachedfunction, cachedproperty
 
 def check(v, s):
 	print(repr(v))
@@ -58,6 +59,28 @@ assert not called
 called = False
 check(f(1234), 1234**12)
 assert called
+
+def fnc(): return 1234**43210
+
+@cachedfunction
+def fcf(): return 1234**43210
+
+@preeval
+def fpe(): return 1234**43210
+
+start = time.time()
+for i in range(100): fnc()
+print('f() no cache:', round(time.time()-start, 4), 'sec')
+
+start = time.time()
+for i in range(100): fcf()
+print('f() cachedfunction():', round(time.time()-start, 4), 'sec')
+assert time.time()-start < 0.1
+
+start = time.time()
+for i in range(100): fpe()
+print('f() preeval():', round(time.time()-start, 4), 'sec')
+assert time.time()-start < 0.0001
 
 log('cached*() test ok\n')
 
