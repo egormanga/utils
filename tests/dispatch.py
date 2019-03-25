@@ -2,7 +2,7 @@
 # Utils lib dispatch() test
 
 import typing
-from utils.nolog import dispatch
+from utils.nolog import S, log, dispatch
 
 def check(v, s):
 	print(repr(v))
@@ -101,6 +101,23 @@ except TypeError as ex: e = ex
 else: e = None
 checkex(e)
 
-print('\ndispatch() test ok')
+class Test:
+	def f(self, x):
+		return S(' ').join((type(x), x))
+
+class SubTest(Test):
+	@dispatch
+	def f(self, x: int):
+		return S(' ').join(('This is an integer:', x, '!'))
+
+	@dispatch
+	def f(self, *args, **kwargs):
+		return super().f(*args, **kwargs)
+
+t = SubTest()
+check(t.f('a'), "<class 'str'> a")
+check(t.f(0), 'This is an integer: 0 !')
+
+log('dispatch() test ok\n')
 
 # by Sdore, 2019

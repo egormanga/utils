@@ -18,32 +18,64 @@ else: logimported()
 # by <AUTHOR>, <YEAR>
 """
 
-import time
-
-_import_times = dict()
-def get_import_times(): return _import_times
-
-class NonExistentModule:
-	def __init__(self, name):
-		self.__name__ = name
-
-	def __repr__(self):
-		return f"<nonexistent module '{self.__name__}'>"
-
-	def __getattr__(self, x):
-		raise \
-			NonExistentModuleError(self.__name__)
-class NonExistentModuleError(ImportError): pass
-
-def Simport(x):
-	x = x.split(' ')
-	start = time.time()
-	try: globals()[x[-1]] = __import__(x[0])
-	except ImportError: globals()[x[-1]] = NonExistentModule(x[0])
-	_import_times[x[0]] = time.time()-start
-
-for i in ('io', 'os', 're', 'sys', 'json', 'base64', 'copy', 'dill', 'glob', 'html', 'math', 'time', 'queue', 'locale', 'pickle', 'random', 'regex', 'select', 'signal', 'socket', 'shutil', 'string', 'typing', 'getpass', 'inspect', 'os.path', 'argparse', 'datetime', 'operator', 'itertools', 'threading', 'traceback', 'collections', 'contextlib', 'subprocess', 'multiprocessing_on_dill as multiprocessing', 'nonexistenttest'): Simport(i)
+import inspect
 from pprint import pprint, pformat
+
+module = type(inspect)
+
+class ModuleProxy(module):
+	def __init__(self, name, as_=None):
+		self.__name__, self.as_ = name, as_ or name
+
+	def __getattribute__(self, x):
+		module = __import__(object.__getattribute__(self, '__name__'))
+		inspect.stack()[1][0].f_globals[object.__getattribute__(self, 'as_')] = module
+		return getattr(module, x)
+
+def Simport(x, as_=None): inspect.stack()[1][0].f_globals[as_ or x] = ModuleProxy(x, as_)
+
+for i in (
+	'io',
+	'os',
+	're',
+	'sys',
+	'copy',
+	'dill',
+	'glob',
+	'html',
+	'json',
+	'math',
+	'queue',
+	'regex',
+	'time',
+	'base64',
+	'locale',
+	'pickle',
+	'random',
+	'select',
+	'shutil',
+	'signal',
+	'socket',
+	'string',
+	'typing',
+	'getpass',
+	'os.path',
+	'argparse',
+	'builtins',
+	'datetime',
+	'operator',
+	'requests',
+	'importlib',
+	'itertools',
+	'threading',
+	'traceback',
+	'contextlib',
+	'subprocess',
+	'collections',
+	'typing_inspect',
+	'multiprocessing_on_dill as multiprocessing',
+	#'nonexistenttest',
+): Simport(*i.split()[::2])
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
 
@@ -60,17 +92,16 @@ def isiterable(x): return isinstance(x, typing.Iterable)
 def isnumber(x): return isinstance(x, (int, float))
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args)
 
-def _S(x=None):
+def S(x=None):
 		ex = None
-		try: return eval('S'+type(x).__name__)(x) if (not isS(x)) else x
+		try: return eval('S'+type(x).__name__)(x) if (not isinstance(x, Stype)) else x
 		except NameError: ex = True
 		if (ex): raise \
 			NotImplementedError("S%s" % type(x).__name__)
-def isS(x): return hasattr(x, '__S__') and x.__S__ is '__S__'
 
-class S: __S__ = '__S__'
+class Stype: pass
 
-class Sdict(S, collections.defaultdict):
+class Sdict(Stype, collections.defaultdict):
 	def __init__(self, *args, **kwargs):
 		args = list(args)
 		if (args and isiterable(args[0])): args.insert(0, None)
@@ -119,7 +150,7 @@ class Sdict(S, collections.defaultdict):
 			except: pass
 Sdefaultdict = Sdict
 
-class Slist(S, list):
+class Slist(Stype, list):
 	def __matmul__(self, item):
 		if (type(item) == dict): return S([i for i in self if all(i.get(j) in (item[j]) for j in item)])
 		r = S([[(i.get(j) if (hasattr(i, 'get')) else i[j]) for j in item] for i in self])
@@ -165,7 +196,7 @@ class Slist(S, list):
 
 class Stuple(Slist): pass # TODO
 
-class Sint(S, int):
+class Sint(Stype, int):
 	def __len__(self):
 		return Sint(math.log10(abs(self) or 10))
 
@@ -175,7 +206,7 @@ class Sint(S, int):
 	def format(self, char=' '):
 		return char.join(map(str().join, Slist(str(self)[::-1]).group(3)))[::-1]
 
-class Sstr(S, str):
+class Sstr(Stype, str):
 	def __and__(self, x):
 		return Sstr().join(i for i in self if i in x)
 
@@ -227,7 +258,7 @@ class Sstr(S, str):
 			ord('6'): '₆',
 			ord('7'): '₇',
 			ord('8'): '₈',
-			ord('9'): '₉'
+			ord('9'): '₉',
 		})
 
 	def super(self):
@@ -249,36 +280,8 @@ def Sbool(x=bool(), *args, **kwargs): # No way to derive a class from bool
 	x = S(x)
 	return x.bool(*args, **kwargs) if (hasattr(x, 'bool')) else bool(x)
 
-#class Sprop: # there is no 'prop' type though; DEPRECATED immidiatly after implementing; may be reimplemented someday.
-#	__props__ = set()
-#	def __init__(self, name, v=None):
-#		self.name = name
-#		globals = self.__globals__(1)
-#		globals[self.name] = v if (self.name in self.__props__) else None or globals.get(self.name) or v if (v is not None) else (lambda x: self(x))
-#		self.__props__.add(self.name)
-#	def __set__(self, v):
-#		self.__globals__(2)[self.name] = v
-#	def __repr__(self):
-#		v = self.__globals__(1)[self.name]
-#		return repr(v) if (type(v) != function) else str()
-#	def __globals__(self, d):
-#		return inspect.stack()[d+1][0].f_globals
-
-S = _S
-
-class DispatchTypeError(TypeError): pass
-class DispatchTypes(tuple): pass
-def dispatch_unpack_typedef(t):
-	if (isinstance(t, DispatchTypes)): return (*(dispatch_unpack_typedef(i) for i in t),)
-	if (isinstance(t, typing.GenericMeta)): return t._subs_tree()
-	return (t,) if (t is not None and t is not Ellipsis) else (type(t),)
-def dispatch_typecheck(o, t): # XXX Warning: unpacks all generators!
-	t = dispatch_unpack_typedef(t)
-	if (not t): return o
-	if (not isinstance(o, t[0])): raise DispatchTypeError()
-	if (isiterable(o)):
-		if (not all(dispatch_typecheck(i, DispatchTypes(t[1:])) for i in o)): raise DispatchTypeError()
-	return o
+def dispatch_typecheck(o, t):
+	return t is None or isinstance(o, typing_inspect.get_origin(t) or t) and (all(dispatch_typecheck(i, typing_inspect.get_args(t)) for i in o) if (isinstance(o, typing.Sequence) and not isinstance(o, str)) else True)
 _overloaded_functions = Sdict(dict)
 _overloaded_functions_retval = Sdict(dict)
 _overloaded_functions_docstings = Sdict(dict)
@@ -298,9 +301,7 @@ def dispatch(f):
 			no = True
 			for ii, a in enumerate(args):
 				if (i >= len(k)): break
-				if (k[i][1][0] is not None):
-					try: args[ii] = dispatch_typecheck(a, k[i][1][0])
-					except DispatchTypeError: break
+				if (not dispatch_typecheck(a, k[i][1][0])): break
 				if (k[i][1][2] in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)): i += 1
 			else: no = False
 			if (no): continue
@@ -316,9 +317,7 @@ def dispatch(f):
 					if (not varkw): break
 					ckw = varkw[0]
 				else: ckw = kw[a]
-				if (ckw[0] is not None):
-					try: kwargs[a] = dispatch_typecheck(kwargs[a], ckw[0])
-					except DispatchTypeError: break
+				if (not dispatch_typecheck(kwargs[a], ckw[0])): break
 				pkw.add(a)
 			else: no = False
 			if (no): continue
@@ -338,6 +337,43 @@ def dispatch_meta(f):
 	_overloaded_functions_docstings[f.__qualname__][()] = f.__doc__
 	return f
 def overloaded_format_signatures(fname, qualname, sep='\n\n'): return sep.join(Sstr().join((qualname, sig, ':\n\b    '+doc if (doc) else '')) for sig, doc in _overloaded_functions_docstings[fname].items())
+
+class cachedfunction:
+	def __init__(self, f):
+		self.f = f
+		self._cached = dict()
+
+	def __call__(self, *args, **kwargs):
+		k = (args, tuple(sorted(kwargs.items())))
+		if (k not in self._cached):
+			self._cached[k] = self.f(*args, **kwargs)
+		return self._cached[k]
+
+# Здесь должен быть текст, но прибежал Лукин и его спёр
+#  25.03.19, 3:18
+
+class cachedproperty:
+	class _empty: __slots__ = ()
+	_empty = _empty()
+
+	def __init__(self, f):
+		self.f = f
+		self._cached = self._empty
+
+	def __get__(self, obj, objcls):
+		if (self._cached is self._empty):
+			self._cached = self.f(obj)
+		return self._cached
+
+def spreadargs(f, okwargs, *args, **akwargs):
+	fsig = inspect.signature(f)
+	kwargs = S(okwargs) & akwargs
+	try: kwnames = (*(i[0] for i in fsig.parameters.items() if (assert_(i[1].kind != inspect.Parameter.VAR_KEYWORD) and i[1].kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY))),)
+	except AssertionError: kwnames = kwargs.keys()
+	for i in kwnames:
+		try: del okwargs[i]
+		except KeyError: pass
+	return f(*args, **kwargs)
 
 logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
 noesc = re.compile(r'\033\[?[0-?]*[ -/]*[@-~]?')
@@ -362,7 +398,7 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	_l, _x = map(copy.copy, (l, x))
 	if (l is None): l = ''
 	if (type(l) is not int): l, x = None, (l, *x)
-	if (x is ()): l, x = 0, (l,)
+	if (x == ()): l, x = 0, (l,)
 	x = 'plog():\n'*bool(format)+sep.join(map((lambda x: pformat(x, width=width)) if (format) else str, x))
 	clearstr = noesc.sub('', str(x))
 	if (tm is None): tm = time.localtime()
@@ -370,7 +406,7 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	try: lc = logcolor[l]
 	except: lc = ''
 	if (ll is None): ll = f' [\033[1m{lc}LV{l}\033[0;96m]' if (l is not None) else ''
-	logstr = f"\033[K\033[96m[{time.strftime('%x %X', tm)}]\033[0;96m{ll}\033[0;1m{' '+x if (x is not '') else ''}\033[0m{end}" if (not raw) else str(x)+end
+	logstr = f"\033[K\033[96m[{time.strftime('%x %X', tm)}]\033[0;96m{ll}\033[0;1m{' '+x if (x != '') else ''}\033[0m{end}" if (not raw) else str(x)+end
 	if (logfile and not nolog): logfile.write(logstr)
 	if (l is None or l <= loglevel): logoutput.write(logstr); logoutput.flush()
 	if (unlock and loglock[-1][0] == unlock):
@@ -394,7 +430,7 @@ def logstate(state, x=''):
 def logstarted(x=''): """ if (__name__ == '__main__'): logstart(); main() """; logstate('\033[94mstarted', x)
 def logimported(x=''): """ if (__name__ != '__main__'): logimported() """; logstate('\033[96mimported', x)
 def logok(x=''): logstate('\033[92mok', x)
-def logex(x=''): logstate('\033[91merror', raise_(x))
+def logex(x=''): logstate('\033[91merror', unraise(x))
 def logwarn(x=''): logstate('\033[93mwarning', x)
 def setlogoutput(f): global logoutput; logoutput = f
 def setlogfile(f): global logfile; logfile = open(f, 'a')
@@ -407,15 +443,17 @@ def setutilsnologimport(): global _logged_utils_start; _logged_utils_start = Tru
 _exc_handlers = set()
 def register_exc_handler(f): _exc_handlers.add(f)
 _logged_exceptions = set()
-def exception(ex, once=False, nolog=False):
+@dispatch
+def exception(ex: BaseException, once=False, nolog=False):
 	""" Log an exception.
 	ex: exception to log.
 	nolog: no not call exc_handlers.
 	"""
+	ex = unraise(ex)
+	if (isinstance(ex, NonLoggingException)): return
 	if (once):
 		if (repr(ex) in _logged_exceptions): return
 		_logged_exceptions.add(repr(ex))
-	if (type(ex) == type and issubclass(ex, BaseException)): ex = ex()
 	exc = repr(ex).split('(')[0]
 	e = log(('\033[91mCaught ' if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+f"{exc}{(' on line '+'→'.join(map(lambda x: str(x[1]), traceback.walk_tb(ex.__traceback__)))).rstrip(' on line')}\033[0m{(': '+str(ex))*bool(str(ex))}")
 	if (nolog): return
@@ -430,7 +468,8 @@ def raise_(ex: BaseException): raise ex
 def unraise(ex: (BaseException, type)):
 	if (isinstance(ex, BaseException)): return ex
 	elif (issubclass(ex, BaseException)): return ex()
-	else: raise TypeError
+	else: raise TypeError()
+def assert_(x): assert x; return True
 
 class _clear:
 	""" Clear the terminal. """
@@ -509,7 +548,7 @@ def progress(cv, mv, pv="▏▎▍▌▋▊▉█", fill='░', border='│', pr
 class Progress:
 	def __init__(self, mv=-1, chars=' ▏▎▍▌▋▊▉█', border='│', prefix='', add_speed_eta=True):
 		self.mv, self.chars, self.border, self.prefix, self.add_speed_eta = mv, chars, border, prefix, add_speed_eta
-		self.fstr = self.prefix+'%d/'+str(self.mv)+' (%d%%%s) '
+		self.fstr = self.prefix+'%d/%d (%d%%%s) '
 		self.printed = bool()
 		self.started = None
 
@@ -520,7 +559,7 @@ class Progress:
 		if (add_speed_eta is None): add_speed_eta = self.add_speed_eta
 		if (self.started is None): self.started = time.time(); add_speed_eta = False
 		if (not self.mv): self.mv = -1
-		r = self.fstr % (cv, cv*100//self.mv, ', '+self.format_speed_eta(cv, self.mv, time.time()-self.started) if (add_speed_eta) else '')
+		r = self.fstr % (cv, self.mv, cv*100//self.mv, ', '+self.format_speed_eta(cv, self.mv, time.time()-self.started) if (add_speed_eta) else '')
 		return r+self.format_bar(cv, self.mv, width-len(r), chars=self.chars, border=self.border)
 
 	@staticmethod
@@ -551,6 +590,11 @@ class ProgressPool:
 	def __init__(self, *p: Progress):
 		self.p = p
 
+	def __del__(self):
+		for i in self.p: i.printed = False
+		sys.stderr.write('\033[J')
+		sys.stderr.flush()
+
 	@dispatch
 	def __init__(self, n: int):
 		self.p = (*(Progress() for _ in range(n)),)
@@ -563,6 +607,9 @@ class ProgressPool:
 		sys.stderr.write(f"\033[{len(self.p)-1}A")
 		sys.stderr.flush()
 
+	def done(self, width=None):
+		self.print(*(i.mv for i in self.p), width=width)
+
 class ThreadedProgressPool(ProgressPool, threading.Thread):
 	def __init__(self, *args, width=None, delay=0.01, **kwargs):
 		threading.Thread.__init__(self, daemon=True)
@@ -573,8 +620,14 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 
 	def run(self):
 		while (not self.stopped):
+			locklog()
 			self.print(*self.cvs, width=self.width)
+			unlocklog()
 			time.sleep(self.delay)
+
+	def stop(self):
+		self.stopped = True
+		self.join()
 
 def testprogress(n=1000, sleep=0.002):
 	p = Progress(n)
@@ -595,6 +648,65 @@ def progiter(iterable):
 	for ii, i in enumerate(iterable):
 		p.print(ii+1)
 		yield i
+
+class NodesTree:
+	chars = '┌├└─│╾╼'
+	colorchars = (*('\033[2m'+i+'\033[22m' for i in chars),)
+
+	def __init__(self, x):
+		self.tree = x
+
+	def print(self, out=sys.stdout, **fmtkwargs):
+		parseargs(fmtkwargs, color=out.isatty())
+		out.write(self.format(**fmtkwargs)+'\n')
+
+	def format(self, **fmtkwargs):
+		return '\n'.join(self.format_node(self.tree, root=True, **fmtkwargs))
+
+	@classmethod
+	def format_node(cls, node, indent=2, color=False, usenodechars=False, root=False):
+		chars = cls.colorchars if (color) else cls.chars
+		nodechar = chars[6] if (usenodechars) else chars[3]
+		for ii, (k, v) in enumerate(node.items()):
+			if (isiterable(v) and not isinstance(v, (str, dict))): k, v = v
+			yield ((chars[0] if (len(node) > 1) else chars[5]) if (root and ii == 0) else chars[1] if (ii < len(node)-1) else chars[2])+chars[3]*(indent-1)+nodechar+' '+str(k)
+			it = tuple(cls.format_node(v if (isinstance(v, dict)) else {v: {}}, indent=indent, color=color, usenodechars=usenodechars))
+			yield from map(lambda x: (chars[4] if (ii < len(node)-1) else ' ')+' '*(indent+1)+x, it)
+
+class TaskTree(NodesTree):
+	class Task:
+		__slots__ = ('title', 'state', 'subtasks')
+
+		def __init__(self, title, subtasks=None):
+			self.title, self.subtasks = str(title), subtasks if (subtasks is not None) else []
+			self.state = None
+
+	def __init__(self, x, **kwargs):
+		self.tree = x
+		self.l = int()
+		l = tuple(self.format_node(self.tree, root=True, **kwargs))
+		self.l = len(l)
+
+	def __del__(self):
+		sys.stderr.write('\n'*self.l)
+		sys.stderr.flush()
+
+	def print(self, **fmtkwargs):
+		sys.stderr.write('\033[J')
+		sys.stderr.write('\n'.join(x+' '+self.format_task(y) for x, y in self.format_node(self.tree, root=True, **fmtkwargs)))
+		sys.stderr.write(f"\r\033[{self.l-1}A")
+		sys.stderr.flush()
+
+	def format_node(self, node, indent=2, color=False, root=False):
+		chars = self.colorchars if (color) else self.chars
+		for ii, t in enumerate(node):
+			yield (((chars[0] if (len(node) > 1) else chars[5]) if (root and ii == 0) else chars[1] if (ii < len(node)-1) else chars[2])+chars[3]*(indent-1)+(chars[6] if (t.state) else chars[3]), t)
+			it = tuple(self.format_node(t.subtasks, indent=indent, color=color))
+			yield from map(lambda x: ((chars[4] if (ii < len(node)-1) else ' ')+' '*indent+x[0], x[1]), it)
+
+	@staticmethod
+	def format_task(t):
+		return f"\033[{93 if (t.state is None) else 91 if (not t.state) else 92}m{t.title}\033[0m"
 
 def validate(l, d, nolog=False):
 	for i in d:
@@ -710,6 +822,7 @@ cio = IOStream(sys.stdin, sys.stdout)
 class WTFException(Exception): pass
 class TODO(NotImplementedError): pass
 class TEST(BaseException): pass
+class NonLoggingException(Exception): pass
 
 def setonsignals(f): signal.signal(signal.SIGINT, f); signal.signal(signal.SIGTERM, f)
 
