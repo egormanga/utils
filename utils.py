@@ -38,6 +38,7 @@ for i in (
 	'io',
 	'os',
 	're',
+	'bs4',
 	'sys',
 	'copy',
 	'dill',
@@ -59,6 +60,7 @@ for i in (
 	'string',
 	'typing',
 	'getpass',
+	'hashlib',
 	'os.path',
 	'argparse',
 	'builtins',
@@ -79,10 +81,10 @@ for i in (
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
 
-argparser = argparse.ArgumentParser(conflict_handler='resolve', description='\033[3A', add_help=False)
+argparser = argparse.ArgumentParser(conflict_handler='resolve', add_help=False)
 argparser.add_argument('-v', action='count', help=argparse.SUPPRESS)
 argparser.add_argument('-q', action='count', help=argparse.SUPPRESS)
-cargs, _ = argparser.parse_known_args()
+cargs = argparser.parse_known_args()[0]
 argparser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
 loglevel = (cargs.v or 0)-(cargs.q or 0)
 
@@ -207,6 +209,9 @@ class Sint(Stype, int):
 		return char.join(map(str().join, Slist(str(self)[::-1]).group(3)))[::-1]
 
 class Sstr(Stype, str):
+	def __getitem__(self, x):
+		return S(str.__getitem__(self, x))
+
 	def __and__(self, x):
 		return Sstr().join(i for i in self if i in x)
 
@@ -230,19 +235,28 @@ class Sstr(Stype, str):
 
 	def just(self, n, char=' ', j=None):
 		if (j is None): j = '<>'[n>0]; n = abs(n)
-		if (j == '.'): return self.center(n, char)
-		elif (j == '<'): return self.ljust(n, char)
-		elif (j == '>'): return self.rjust(n, char)
-		else: raise ValueError
+		if (j == '.'): r = self.center(n, char)
+		elif (j == '<'): r = self.ljust(n, char)
+		elif (j == '>'): r = self.rjust(n, char)
+		else: raise ValueError(j)
+		return S(r)
 
 	def sjust(self, n, *args, **kwargs):
 		return self.indent(n-len(self), *args, **kwargs)
 
-	def wrap(self, w, char=' ', j='<'):
+	def wrap(self, w, j='<', char=' ', loff=0):
+		if (len(self) <= w-loff): return self
+		r = Sstr()
+		for i in self.split(' '):
+			r += i
+			r += '\n' if (len(r.split('\n')[-1])+len(i)+1 > w-loff) else ' '
+		return '\n'.join(S(char*(loff*bool(ii))+S(i)).just(w*(ii == r.count('\n')), j=j, char=char) for ii, i in enumerate(r.rstrip(' ').split('\n')))
+
+	def rwrap(self, w, char=' '):
 		r = self.split('\n')
-		for ii, i in enumerate(r):
-			if (len(i) > w): r.insert(ii+1, S(i[w:]).just(w, char, j=j)); r[ii] = r[ii][:w]
-		return S('\n'.join(r))
+
+	def split(self, *args, **kwargs):
+		return list(map(Sstr, str.split(self, *args, **kwargs)))
 
 	def filter(self, chars):
 		return str().join(i for i in self if i in chars)
@@ -286,7 +300,7 @@ def dispatch_typecheck(o, t): #return t is None or isinstance(o, typing_inspect.
 	if (isinstance(o, DispatchFillValue) or isinstance(t, DispatchFillValue)): return False
 	if (not isinstance(o, (typing_inspect.get_constraints(t) or type(o)) if (isinstance(t, typing.TypeVar)) else typing_inspect.get_origin(t) or t)): return False
 	if (isinstance(o, typing.Tuple) and issubclass(typing_inspect.get_origin(t), typing.Tuple) and typing_inspect.get_args(t) and not all(itertools.starmap(dispatch_typecheck, itertools.zip_longest(o, typing_inspect.get_args(t), fillvalue=DispatchFillValue())))): return False
-	if (isinstance(o, typing.Iterable) and not isinstance(o, typing.Tuple) and not isinstance(o, str) and typing_inspect.get_args(t) and not all(dispatch_typecheck(i, typing_inspect.get_args(t)[0]) for i in o)): return False
+	if (isinstance(o, typing.Iterable) and not isinstance(o, (typing.Tuple, typing.Iterator)) and not isinstance(o, str) and typing_inspect.get_args(t) and not all(dispatch_typecheck(i, typing_inspect.get_args(t)[0]) for i in o)): return False
 	return True
 _overloaded_functions = Sdict(dict)
 _overloaded_functions_retval = Sdict(dict)
@@ -624,12 +638,18 @@ class ProgressPool:
 			self.ranges[n] = i-start
 			if (n == len(self.p)-1): self.print(*self.ranges)
 			yield i
+		self.ranges[n] = stop
+		self.print(*self.ranges)
 		self.ranges.pop()
 
 	@dispatch
+	def iter(self, iterator: typing.Iterator, l: int):
+		yield from (next(iterator) for _ in self.range(l))
+
+	@dispatch
 	def iter(self, iterable: typing.Iterable):
-		l = tuple(iterable)
-		yield from (l[i] for i in self.range(len(l)))
+		it = tuple(iterable)
+		yield from (it[i] for i in self.range(len(it)))
 
 	def done(self, width=None):
 		self.print(*(i.mv for i in self.p), width=width)
@@ -673,6 +693,11 @@ def progrange(start, stop=None, step=1):
 	for i in range(start, stop, step):
 		p.print(i-start)
 		yield i
+	p.print(stop)
+
+@dispatch
+def progiter(iterator: typing.Iterator, l: int): # TODO: why yield?
+	yield from (next(iterator) for _ in progrange(l))
 
 @dispatch
 def progiter(iterable: typing.Iterable):
@@ -860,8 +885,6 @@ class TODO(NotImplementedError): pass
 class TEST(BaseException): pass
 class NonLoggingException(Exception): pass
 
-def setonsignals(f): signal.signal(signal.SIGINT, f); signal.signal(signal.SIGTERM, f)
-
 def exit(c=None, code=None, raw=False, nolog=False):
 	sys.stderr.write('\r')
 	unlocklog()
@@ -870,6 +893,8 @@ def exit(c=None, code=None, raw=False, nolog=False):
 	try: sys.exit(int(bool(c)) if (code is not None) else code)
 	finally:
 		if (not nolog): log(raw=True)
+
+def setonsignals(f=exit): signal.signal(signal.SIGINT, f); signal.signal(signal.SIGTERM, f)
 
 logstart('Utils')
 if (__name__ == '__main__'):
