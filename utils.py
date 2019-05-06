@@ -38,6 +38,7 @@ for i in (
 	'io',
 	'os',
 	're',
+	'abc',
 	'bs4',
 	'sys',
 	'copy',
@@ -490,6 +491,7 @@ def unraise(ex: (BaseException, type)):
 	elif (issubclass(ex, BaseException)): return ex()
 	else: raise TypeError()
 def assert_(x): assert x; return True
+def noop(*_, **__): pass
 
 class _clear:
 	""" Clear the terminal. """
@@ -886,7 +888,7 @@ class TEST(BaseException): pass
 class NonLoggingException(Exception): pass
 
 def exit(c=None, code=None, raw=False, nolog=False):
-	sys.stderr.write('\r')
+	sys.stderr.write('\r\033[K')
 	unlocklog()
 	db.save(nolog=True)
 	if (not nolog): log(f'{c}' if (raw) else f'Exit: {c}' if (c and type(c) == str or hasattr(c, 'args') and c.args) else 'Exit.')
