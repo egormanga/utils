@@ -65,6 +65,8 @@ for i in (
 	'typing',
 	'getpass',
 	'hashlib',
+	'keyword',
+	'marshal',
 	'os.path',
 	'argparse',
 	'attrdict',
