@@ -39,7 +39,9 @@ for i in (
 	'os',
 	're',
 	'abc',
+	'ast',
 	'bs4',
+	'dis',
 	'sys',
 	'copy',
 	'dill',
@@ -47,9 +49,10 @@ for i in (
 	'html',
 	'json',
 	'math',
+	'time',
+	'zlib',
 	'queue',
 	'regex',
-	'time',
 	'base64',
 	'locale',
 	'pickle',
@@ -64,9 +67,11 @@ for i in (
 	'hashlib',
 	'os.path',
 	'argparse',
+	'attrdict',
 	'builtins',
 	'datetime',
 	'operator',
+	'readline',
 	'requests',
 	'importlib',
 	'itertools',
@@ -77,7 +82,7 @@ for i in (
 	'collections',
 	'typing_inspect',
 	'multiprocessing_on_dill as multiprocessing',
-	#'nonexistenttest',
+	#'nonexistenttest'
 ): Simport(*i.split()[::2])
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
@@ -89,11 +94,14 @@ cargs = argparser.parse_known_args()[0]
 argparser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
 loglevel = (cargs.v or 0)-(cargs.q or 0)
 
+function = type(lambda: None)
+code = type(compile('', '', 'exec'))
 endl = '\n'
 
 def isiterable(x): return isinstance(x, typing.Iterable)
 def isnumber(x): return isinstance(x, (int, float))
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args)
+def hex(x, l=2): return '0x%%0%dX' % l % x
 
 def S(x=None):
 	ex = None
@@ -148,9 +156,10 @@ class Sdict(Stype, collections.defaultdict):
 		self._to_discard.add(x)
 
 	def discard(self):
-		while (self._to_discard):
-			try: self.pop(self._to_discard.pop())
-			except: pass
+		for i in self._to_discard:
+			try: self.pop(i)
+			except IndexError: pass
+		self._to_discard.clear()
 Sdefaultdict = Sdict
 
 class Slist(Stype, list):
@@ -177,25 +186,25 @@ class Slist(Stype, list):
 		return S([(*(j for j in i if (j is not None)),) for i in itertools.zip_longest(*[iter(self)]*n)])
 
 	def flatten(self):
-		return S([j for i in self for j in i])
+		return S([j for i in self if i for j in (i if (i and isiterable(i) and not isinstance(i, str)) else (i,))])
 
 	def strip(self, s=None):
 		l = self.copy()
-		l = l[0] if (len(l) == 1 and isiterable(l[0])) else l
-		return S([i for i in l if (i if (s is None) else i != s)])
+		if (not isiterable(s) or isinstance(s, str)): s = (s,)
+		return S([i for i in l if (i if (s is None) else i not in s)])
 
 	def filter(self, t):
 		return S([i for i in self if type(i) == t])
 
 	_to_discard = set()
-
 	def to_discard(self, x):
 		self._to_discard.add(x)
 
 	def discard(self):
-		while (self._to_discard):
-			try: self.pop(self._to_discard.pop())
-			except: pass
+		for i in self._to_discard:
+			try: self.pop(i)
+			except IndexError: pass
+		self._to_discard.clear()
 
 class Stuple(Slist): pass # TODO
 
@@ -257,10 +266,18 @@ class Sstr(Stype, str):
 		r = self.split('\n')
 
 	def split(self, *args, **kwargs):
-		return list(map(Sstr, str.split(self, *args, **kwargs)))
+		return Slist(map(Sstr, str.split(self, *args, **kwargs)))
 
 	def filter(self, chars):
-		return str().join(i for i in self if i in chars)
+		return Sstr().join(i for i in self if i in chars)
+
+	def capwords(self, sep=' '):
+		s = list(self)
+		c = True
+		for ii, i in enumerate(s):
+			if (c): s[ii] = i.upper(); c = False
+			if (i in sep): c = True
+		return Sstr().join(s)
 
 	def sub(self):
 		return self.translate({
@@ -276,7 +293,8 @@ class Sstr(Stype, str):
 			ord('9'): '₉',
 		})
 
-	def super(self):
+	def super(self): logexception(DeprecationWarning(" *** super() → sup() *** ")); return self.sup()
+	def sup(self):
 		return self.translate({
 			ord('0'): '⁰',
 			ord('1'): '¹',
@@ -296,6 +314,7 @@ def Sbool(x=bool(), *args, **kwargs): # No way to derive a class from bool
 	return x.bool(*args, **kwargs) if (hasattr(x, 'bool')) else bool(x)
 
 class DispatchFillValue: pass
+class DispatchError(TypeError): pass
 def dispatch_typecheck(o, t): #return t is None or isinstance(o, typing_inspect.get_constraints(t) if (isinstance(t, typing.TypeVar)) else typing_inspect.get_origin(t) or t) and ((all(itertools.starmap(dispatch_typecheck, zip(o, t)))) if (isinstance(o, typing.Tuple)) else all(dispatch_typecheck(i, typing_inspect.get_args(t)[0]) for i in o) if (isinstance(o, typing.Sequence) and not isinstance(o, str)) else True)
 	if (t is None or t is inspect._empty): return True
 	if (isinstance(o, DispatchFillValue) or isinstance(t, DispatchFillValue)): return False
@@ -317,7 +336,7 @@ def dispatch(f):
 	def overloaded(*args, **kwargs):
 		args = list(args)
 		for k, v in _overloaded_functions[fname].items():
-			#dplog(k)
+			#dplog(k) # XXX
 			i = int()
 			no = True
 			for ii, a in enumerate(args):
@@ -347,10 +366,10 @@ def dispatch(f):
 			r = v(*args, **kwargs); break
 		else:
 			if (() in _overloaded_functions[fname]): r = _overloaded_functions[fname][()](*args, **kwargs)
-			else: raise TypeError(f"Parameters {(*map(type, args), *map(type, kwargs.values()))} doesn't match any of '{fname}' signatures:\n{S(overloaded_format_signatures(fname, f.__qualname__, sep=endl)).indent(2, char=' ')}")
+			else: raise DispatchError(f"Parameters {(*map(type, args), *map(type, kwargs.values()))} doesn't match any of '{fname}' signatures:\n{S(overloaded_format_signatures(fname, f.__qualname__, sep=endl)).indent(2, char=' ')}")
 		retval = _overloaded_functions_retval[fname][k]
 		if (retval is not inspect._empty and not isinstance(r, retval)):
-			raise TypeError(f"Return value of type {type(r)} doesn't match return annotation of appropriate '{fname}' signature")
+			raise DispatchError(f"Return value of type {type(r)} doesn't match return annotation of appropriate '{fname}' signature")
 		return r
 	overloaded.__name__, overloaded.__qualname__, overloaded.__module__, overloaded.__doc__, overloaded.__signature__, overloaded.__code__ = f"Overloaded {f.__name__}", f.__qualname__, f.__module__, (_overloaded_functions_docstings[fname][()]+'\n\n' if (() in _overloaded_functions_docstings[fname]) else '')+overloaded_format_signatures(fname, f.__qualname__), ..., type(overloaded.__code__)(overloaded.__code__.co_argcount, overloaded.__code__.co_kwonlyargcount, overloaded.__code__.co_nlocals, overloaded.__code__.co_stacksize, overloaded.__code__.co_flags, overloaded.__code__.co_code, overloaded.__code__.co_consts, overloaded.__code__.co_names, overloaded.__code__.co_varnames, overloaded.__code__.co_filename, f"<overloaded '{f.__qualname__}'>", overloaded.__code__.co_firstlineno, overloaded.__code__.co_lnotab, overloaded.__code__.co_freevars, overloaded.__code__.co_cellvars) # it's soooooo long :D
 	return overloaded
@@ -358,6 +377,14 @@ def dispatch_meta(f):
 	_overloaded_functions_docstings[f.__qualname__][()] = f.__doc__
 	return f
 def overloaded_format_signatures(fname, qualname, sep='\n\n'): return sep.join(Sstr().join((qualname, sig, ':\n\b    '+doc if (doc) else '')) for sig, doc in _overloaded_functions_docstings[fname].items())
+
+def cast_call(f, *args, **kwargs):
+	fsig = inspect.signature(f)
+	r = f(*((v.annotation)(args[ii]) if (v.annotation is not inspect._empty) else args[ii] for ii, (k, v) in enumerate(fsig.parameters.items()) if ii < len(args)), **{k: (fsig.parameters[k].annotation)(v) if (fsig.parameters[k].annotation is not inspect._empty) else v for k, v in kwargs.items()})
+	return (fsig.return_annotation)(r) if (fsig.return_annotation is not inspect._empty) else r
+
+# Beware! leads to 'ndefined behavior when used with @dispatch
+def autocast(f): return lambda *args, **kwargs: cast_call(f, *args, **kwargs)
 
 class cachedfunction:
 	def __init__(self, f):
@@ -409,8 +436,11 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 		*x: print-like args, what to log.
 		sep: print-like separator.
 		end: print-like line end.
+		ll: formatted string instead of loglevel for output.
 		raw: flag, do not print datetime/loglevel prefix if set.
-		tm: specify datetime, time.time() if not set.
+		tm: specify datetime, time.time() if not set, nothing if False.
+		format: use pformat() on args if set.
+		width: specify output line width for wrapping, autodetect from stderr if not specified.
 		unlock: [undocumented]
 		nolog: flag, force suppress printing to stderr.
 	"""
@@ -425,9 +455,9 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	if (tm is None): tm = time.localtime()
 	if (not unlock and loglock[-1][0]): loglock[-1][1].append(((_l, *_x), dict(sep=sep, end=end, raw=raw, tm=tm, nolog=nolog))); return clearstr
 	try: lc = logcolor[l]
-	except: lc = ''
-	if (ll is None): ll = f' [\033[1m{lc}LV{l}\033[0;96m]' if (l is not None) else ''
-	logstr = f"\033[K\033[96m[{time.strftime('%x %X', tm)}]\033[0;96m{ll}\033[0;1m{' '+x if (x != '') else ''}\033[0m{end}" if (not raw) else str(x)+end
+	except (TypeError, IndexError): lc = ''
+	if (ll is None): ll = f'[\033[1m{lc}LV{l}\033[0;96m]' if (l is not None) else ''
+	logstr = f"\033[K\033[96m{time.strftime('[%x %X] ', tm) if (tm) else ''}\033[0;96m{ll}\033[0;1m{' '*bool(ll)+x if (x != '') else ''}\033[0m{end}" if (not raw) else str(x)+end
 	if (logfile and not nolog): logfile.write(logstr)
 	if (l is None or l <= loglevel): logoutput.write(logstr); logoutput.flush()
 	if (unlock and loglock[-1][0] == unlock):
@@ -435,7 +465,7 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 		for i in _loglock[1]: log(*i[0], **i[1], unlock=_loglock[0])
 	return clearstr
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
-def dlog(*args, **kwargs): parseargs(kwargs, ll=' \033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m'); return log(*args, **kwargs)
+def dlog(*args, **kwargs): parseargs(kwargs, ll='\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m'); return log(*args, **kwargs)
 def dplog(*args, **kwargs): parseargs(kwargs, format=True); return dlog(*args, **kwargs)
 def logdumb(**kwargs): return log(raw=True, end='', **kwargs)
 def logstart(x):
@@ -485,12 +515,28 @@ logexception = exception
 
 @dispatch
 def raise_(ex: BaseException): raise ex
+
 @dispatch
-def unraise(ex: (BaseException, type)):
-	if (isinstance(ex, BaseException)): return ex
-	elif (issubclass(ex, BaseException)): return ex()
-	else: raise TypeError()
+def unraise(ex: BaseException): return ex
+@dispatch
+def unraise(ex: type):
+	if (not issubclass(ex, BaseException)): raise TypeError()
+	return ex()
+
+@dispatch
+def catch(*ex: type):
+	if (not all(issubclass(i, BaseException) for i in ex)): raise TypeError()
+	def decorator(f):
+		def wrapped(*args, **kwargs):
+			try: return f(*args, **kwargs)
+			except ex: pass
+		return wrapped
+	return decorator
+@dispatch
+def catch(f: function): return catch(BaseException)(f)
+
 def assert_(x): assert x; return True
+
 def noop(*_, **__): pass
 
 class _clear:
@@ -553,9 +599,9 @@ class DB:
 		if (not nolog): logstart('Saving database')
 		if (backup):
 			try: os.mkdir('backup')
-			except: pass
+			except FileExistsError: pass
 			try: shutil.copyfile(self.file.name, f"backup/{self.file.name if (hasattr(self.file, 'name')) else ''}_{time.time()}.db")
-			except: pass
+			except OSError: pass
 		try: dill.dump(db or {field: self.fields[field][field] for field in self.fields}, self.file)
 		except Exception as ex:
 			if (not nolog): logex(ex)
@@ -783,7 +829,7 @@ def validate(l, d, nolog=False):
 
 def decline(n, w, prefix=('',)*3, format=False, show_one=True):
 	q = abs(n) % 10
-	if (5 <= abs(n) <= 20): q = 0
+	if (5 <= abs(n % 100) <= 20): q = 0
 	if (q == 1): r, p = w[0], prefix[0]
 	elif (2 <= q <= 4): r, p = w[1], prefix[1]
 	else: r, p = w[2], prefix[2]
@@ -806,12 +852,9 @@ def frame(x, c=' ', j='.'): # j: {'<', '.', '>'}
 def iter_queue(q):
 	while (q.size()): yield q.get()
 
-function = type(lambda: None)
-
 def pm(x): return 1 if (x) else -1
 def constrain(x, lb, ub):
 	r = min(ub, max(lb, x))
-	assert lb <= r <= ub
 	return r
 def prod(x):
 	r = 1
@@ -882,6 +925,7 @@ cout = OStream(sys.stdout)
 cerr = OStream(sys.stderr)
 cio = IOStream(sys.stdin, sys.stdout)
 
+class UserError(Exception): pass
 class WTFException(Exception): pass
 class TODO(NotImplementedError): pass
 class TEST(BaseException): pass
