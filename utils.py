@@ -399,6 +399,9 @@ class cachedfunction:
 			self._cached[k] = self.f(*args, **kwargs)
 		return self._cached[k]
 
+	def clear_cache(self):
+		self._cached.clear()
+
 # Здесь должен быть текст, но прибежал Лукин и его спёр
 #  25.03.19, 3:18
 
@@ -852,7 +855,7 @@ def frame(x, c=' ', j='.'): # j: {'<', '.', '>'}
 		'╰'+'─'*(w+2)+'╯'
 
 def iter_queue(q):
-	while (q.size()): yield q.get()
+	while (q.qsize()): yield q.get()
 
 def pm(x): return 1 if (x) else -1
 def constrain(x, lb, ub):
