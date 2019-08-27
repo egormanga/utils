@@ -5,9 +5,6 @@
 
 Code example:
 
-#!/usr/bin/python3
-# <NAME>
-
 from utils import *; logstart('<NAME>')
 
 def main(): pass
@@ -15,7 +12,6 @@ def main(): pass
 if (__name__ == '__main__'): logstarted(); main()
 else: logimported()
 
-# by <AUTHOR>, <YEAR>
 """
 
 import inspect
@@ -24,17 +20,21 @@ from pprint import pprint, pformat
 module = type(inspect)
 
 class ModuleProxy(module):
+	__slots__ = ('_as',)
+
 	def __init__(self, name, as_=None):
-		self.__name__, self.as_ = name, as_ or name
+		self.__name__, self._as = name, as_ or name
 
 	def __getattribute__(self, x):
 		module = __import__(object.__getattribute__(self, '__name__'))
-		inspect.stack()[1][0].f_globals[object.__getattribute__(self, 'as_')] = module
+		inspect.stack()[1][0].f_globals[object.__getattribute__(self, '_as')] = module
 		return getattr(module, x)
 
-def Simport(x, as_=None): inspect.stack()[1][0].f_globals[as_ or x] = ModuleProxy(x, as_)
+def Simport(x, as_=None):
+	#inspect.stack()[1][0].f_globals
+	globals()[as_ or x] = ModuleProxy(x, as_)
 
-for i in (
+_imports = (
 	'io',
 	'os',
 	're',
@@ -42,31 +42,41 @@ for i in (
 	'ast',
 	'bs4',
 	'dis',
+	'pip',
 	'sys',
+	'code',
 	'copy',
 	'dill',
 	'glob',
 	'html',
 	'json',
 	'math',
+	'stat',
 	'time',
 	'zlib',
 	'queue',
 	'regex',
 	'base64',
+	'bidict',
+	'codeop',
 	'locale',
 	'pickle',
+	'psutil',
 	'random',
 	'select',
 	'shutil',
 	'signal',
 	'socket',
 	'string',
+	'struct',
 	'typing',
+	'asyncio',
+	'aiohttp',
 	'getpass',
 	'hashlib',
 	'keyword',
 	'marshal',
+	'numbers',
 	'os.path',
 	'argparse',
 	'attrdict',
@@ -75,6 +85,8 @@ for i in (
 	'operator',
 	'readline',
 	'requests',
+	'fractions',
+	'functools',
 	'importlib',
 	'itertools',
 	'threading',
@@ -82,12 +94,25 @@ for i in (
 	'contextlib',
 	'subprocess',
 	'collections',
+	'better_exchook',
 	'typing_inspect',
 	'multiprocessing_on_dill as multiprocessing',
 	#'nonexistenttest'
-): Simport(*i.split()[::2])
+)
+for i in _imports: Simport(*i.split()[::2])
+del i, Simport # TODO FIXME? (inspect.stack() is too slow)
+
+def install_all_imports():
+	for i in _imports:
+		i = i.partition(' ')[0]
+		if (i in sys.modules): continue
+		try: __import__(i)
+		except ModuleNotFoundError: pip.main(['install', i])
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
+
+#try: better_exchook.install()
+#except ModuleNotFoundError: pass
 
 argparser = argparse.ArgumentParser(conflict_handler='resolve', add_help=False)
 argparser.add_argument('-v', action='count', help=argparse.SUPPRESS)
@@ -97,15 +122,21 @@ argparser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
 loglevel = (cargs.v or 0)-(cargs.q or 0)
 
 function = type(lambda: None)
-code = type(compile('', '', 'exec'))
+generator = type(_ for _ in ())
+CodeType = type(compile('', '', 'exec'))
+NoneType = type(None)
+inf = float('inf')
+nan = float('nan')
 endl = '\n'
 
 def isiterable(x): return isinstance(x, typing.Iterable)
+def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
 def isnumber(x): return isinstance(x, (int, float))
-def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args)
+def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args); return kwargs
 def hex(x, l=2): return '0x%%0%dX' % l % x
 
 def S(x=None):
+	""" Convert `x' to an instance of corresponding S-type. """
 	ex = None
 	try: return eval('S'+type(x).__name__)(x) if (not isinstance(x, Stype)) else x
 	except NameError: ex = True
@@ -121,33 +152,37 @@ class Sdict(Stype, collections.defaultdict):
 		if (not args): args.insert(0, None)
 		super().__init__(*args, **kwargs)
 
+	__repr__ = dict.__repr__
+
 	def __and__(self, x):
-		r = self.copy(); r.update(x); return S(r)
+		""" Return self with applied .update(x). """
+		r = Sdict(self); r.update(x); return r
 
-	def __matmul__(self, item):
-		if (type(item) == dict): return S([i for i in self if all(self.get(i) in item[j] for j in item)])
-		#if (len(item) == 1): return S([self[i].get(item[0]) for i in self])
-		return S([self.get(i) for i in item])
+	def __matmul__(self, x):
+		""" Return list of values in self filtered by `x'. """
+		if (isinstance(x, dict)): return Slist(i for i in self if all(self[i] in j for j in x.values())) # TODO doc me
+		#if (len(x) == 1): return Slist(self[i].get(x[0]) for i in self) # TODO wtf??
+		return Slist(self.get(i) for i in x)
 
-	def __call__(self, *x):
-		return S({i: self.get(i) for i in x})
+	def __call__(self, *keys):
+		""" Return subdict of self filtered by call arguments (`*keys'). """
+		return Sdict({i: self.get(i) for i in keys})
 
 	def __copy__(self):
 		return Sdict(self.default_factory, self)
 
-	__repr__ = dict.__repr__
-
 	copy = __copy__
 
 	def translate(self, table, copy=False, strict=True, keep=True):
-		r = self.copy()
+		r = Sdict(self)
 		for i in table:
 			k, t = table[i] if (isinstance(table[i], (tuple, list))) else (table[i], lambda x: x)
 			if (not strict and k not in r): continue
 			if (keep and i not in r): r[i] = t((r.get if (copy) else r.pop)(k))
-		return S(r)
+		return r
 
 	def with_(self, key, value=None):
+		""" Return self with item `key' set to `value'. """
 		r = self.copy()
 		r[key] = value
 		return r
@@ -166,13 +201,13 @@ Sdefaultdict = Sdict
 
 class Slist(Stype, list):
 	def __matmul__(self, item):
-		if (type(item) == dict): return S([i for i in self if all(i.get(j) in (item[j]) for j in item)])
-		r = S([[(i.get(j) if (hasattr(i, 'get')) else i[j]) for j in item] for i in self])
+		if (type(item) == dict): return Slist(i for i in self if all(i.get(j) in (item[j]) for j in item))
+		r = Slist(Slist((i.get(j) if (hasattr(i, 'get')) else i[j]) for j in item) for i in self)
 		return r.flatten() if (len(item) == 1 and not isiterable(item[0]) or type(item[0]) == str) else r
 
 	def __getitem__(self, x):
 		if (not isiterable(x)): return list.__getitem__(self, x)
-		return S([i for i in self if (type(i) == dict and i.get(x[0]) in x[1:])])
+		return Slist(i for i in self if (type(i) == dict and i.get(x[0]) in x[1:]))
 
 	def __sub__(self, x):
 		l = self.copy()
@@ -182,21 +217,29 @@ class Slist(Stype, list):
 		return l
 
 	def copy(self):
-		return S(list.copy(self))
+		return Slist(self)
+
+	def rindex(self, x, start=0):
+		l = len(self)-1
+		return l-self[::-1].index(x, 0, l-start)
 
 	def group(self, n):
-		return S([(*(j for j in i if (j is not None)),) for i in itertools.zip_longest(*[iter(self)]*n)])
+		return Slist((*(j for j in i if (j is not None)),) for i in itertools.zip_longest(*[iter(self)]*n))
 
 	def flatten(self):
-		return S([j for i in self if i for j in (i if (i and isiterable(i) and not isinstance(i, str)) else (i,))])
+		return Slist(j for i in self if i for j in (i if (i and isiterable(i) and not isinstance(i, str)) else (i,)))
 
 	def strip(self, s=None):
 		l = self.copy()
 		if (not isiterable(s) or isinstance(s, str)): s = (s,)
-		return S([i for i in l if (i if (s is None) else i not in s)])
+		return Slist(i for i in l if (i if (s is None) else i not in s))
 
 	def filter(self, t):
-		return S([i for i in self if type(i) == t])
+		return Slist(i for i in self if type(i) == t)
+
+	def uniquize(self, key=lambda x: x):
+		was = set()
+		return Slist(was.add(key(i)) or i for i in self if key(i) not in was) # such a dirty hack..
 
 	_to_discard = set()
 	def to_discard(self, x):
@@ -215,24 +258,34 @@ class Sint(Stype, int):
 		return Sint(math.log10(abs(self) or 10))
 
 	def constrain(self, lb, ub):
-		return S(constrain(self, lb, ub))
+		return Sint(constrain(self, lb, ub))
 
 	def format(self, char=' '):
 		return char.join(map(str().join, Slist(str(self)[::-1]).group(3)))[::-1]
 
+	def pm(self):
+		return f"+{self}" if (self > 0) else str(self)
+
 class Sstr(Stype, str):
 	def __getitem__(self, x):
-		return S(str.__getitem__(self, x))
+		return Sstr(self[x])
 
 	def __and__(self, x):
 		return Sstr().join(i for i in self if i in x)
 
-	def fit(self, l, char='…'):
-		return S(self if (len(self) <= l) else self[:l-1]+char)
+	def fit(self, l, *, end='…'):
+		return Sstr(self if (len(self) <= l) else self[:l-1]+end)
 
-	def join(self, l, last=None):
+	def cyclefit(self, l, n, *, sep=' '*8, start_delay=0, **kwargs):
+		if (len(self) <= l): return self
+		n = max(0, (n % (len(self)+len(sep)+start_delay))-start_delay)
+		return Sstr((self+sep)[n:]+self[:n]).fit(l)
+
+	def join(self, l, *, first='', last=None):
 		l = tuple(map(str, l))
-		return S((str.join(self, l[:-1])+(last or self)+l[-1]) if (len(l) > 1) else l[0] if (l) else '')
+		r = (str.join(self, l[:-1])+(last or self)+l[-1]) if (len(l) > 1) else l[0] if (l) else ''
+		if (r): r = first+r
+		return Sstr(r)
 
 	def bool(self, minus_one=True):
 		return bool(self) and self.casefold() not in ('0', 'false', 'no', 'нет', '-1'*(not minus_one))
@@ -251,7 +304,7 @@ class Sstr(Stype, str):
 		elif (j == '<'): r = self.ljust(n, char)
 		elif (j == '>'): r = self.rjust(n, char)
 		else: raise ValueError(j)
-		return S(r)
+		return Sstr(r)
 
 	def sjust(self, n, *args, **kwargs):
 		return self.indent(n-len(self), *args, **kwargs)
@@ -262,7 +315,7 @@ class Sstr(Stype, str):
 		for i in self.split(' '):
 			r += i
 			r += '\n' if (len(r.split('\n')[-1])+len(i)+1 > w-loff) else ' '
-		return '\n'.join(S(char*(loff*bool(ii))+S(i)).just(w*(ii == r.count('\n')), j=j, char=char) for ii, i in enumerate(r.rstrip(' ').split('\n')))
+		return Sstr('\n'.join(Sstr(char*(loff*bool(ii))+i).just(w*(ii == r.count('\n')), j=j, char=char) for ii, i in enumerate(r.rstrip(' ').split('\n'))))
 
 	def rwrap(self, w, char=' '):
 		r = self.split('\n')
@@ -315,13 +368,17 @@ def Sbool(x=bool(), *args, **kwargs): # No way to derive a class from bool
 	x = S(x)
 	return x.bool(*args, **kwargs) if (hasattr(x, 'bool')) else bool(x)
 
+def code_with(code, **kwargs): return CodeType(*(kwargs.get(i, getattr(code, 'co_'+i)) for i in ('argcount', 'kwonlyargcount', 'nlocals', 'stacksize', 'flags', 'code', 'consts', 'names', 'varnames', 'filename', 'name', 'firstlineno', 'lnotab', 'freevars', 'cellvars')))
+
 class DispatchFillValue: pass
 class DispatchError(TypeError): pass
-def dispatch_typecheck(o, t): #return t is None or isinstance(o, typing_inspect.get_constraints(t) if (isinstance(t, typing.TypeVar)) else typing_inspect.get_origin(t) or t) and ((all(itertools.starmap(dispatch_typecheck, zip(o, t)))) if (isinstance(o, typing.Tuple)) else all(dispatch_typecheck(i, typing_inspect.get_args(t)[0]) for i in o) if (isinstance(o, typing.Sequence) and not isinstance(o, str)) else True)
+def dispatch_typecheck(o, t):
+	# TODO: Come on, just one single if! (just test it)
+	#return t is None or t is inspect._empty or not isinstance(o, DispatchFillValue) and not isinstance(t, DispatchFillValue) and isinstance(o, (typing_inspect.get_constraints(t) or type(o)) if (isinstance(t, typing.TypeVar)) else typing_inspect.get_origin(t) or t) and (not isinstance(o, typing.Tuple) or not typing_inspect.get_origin(t) or not issubclass(typing_inspect.get_origin(t), typing.Tuple) or not typing_inspect.get_args(t) or all(itertools.starmap(dispatch_typecheck, itertools.zip_longest(o, typing_inspect.get_args(t), fillvalue=DispatchFillValue())))) and (not isinstance(o, typing.Iterable) or isinstance(o, (typing.Tuple, typing.Iterator)) or isinstance(o, str) or not typing_inspect.get_args(t) or all(dispatch_typecheck(i, typing_inspect.get_args(t)[0]) for i in o))
 	if (t is None or t is inspect._empty): return True
 	if (isinstance(o, DispatchFillValue) or isinstance(t, DispatchFillValue)): return False
 	if (not isinstance(o, (typing_inspect.get_constraints(t) or type(o)) if (isinstance(t, typing.TypeVar)) else typing_inspect.get_origin(t) or t)): return False
-	if (isinstance(o, typing.Tuple) and issubclass(typing_inspect.get_origin(t), typing.Tuple) and typing_inspect.get_args(t) and not all(itertools.starmap(dispatch_typecheck, itertools.zip_longest(o, typing_inspect.get_args(t), fillvalue=DispatchFillValue())))): return False
+	if (isinstance(o, typing.Tuple) and typing_inspect.get_origin(t) and issubclass(typing_inspect.get_origin(t), typing.Tuple) and typing_inspect.get_args(t) and not all(itertools.starmap(dispatch_typecheck, itertools.zip_longest(o, typing_inspect.get_args(t), fillvalue=DispatchFillValue())))): return False
 	if (isinstance(o, typing.Iterable) and not isinstance(o, (typing.Tuple, typing.Iterator)) and not isinstance(o, str) and typing_inspect.get_args(t) and not all(dispatch_typecheck(i, typing_inspect.get_args(t)[0]) for i in o)): return False
 	return True
 _overloaded_functions = Sdict(dict)
@@ -332,7 +389,7 @@ def dispatch(f):
 	fsig = inspect.signature(f)
 	params_annotation = tuple((i[0], (None if (i[1].annotation is inspect._empty) else i[1].annotation, i[1].default is not inspect._empty, i[1].kind)) for i in fsig.parameters.items())
 	_overloaded_functions[fname][params_annotation] = f
-	_overloaded_functions_retval[fname][params_annotation] = fsig.return_annotation
+	_overloaded_functions_retval[fname][params_annotation] = type(fsig.return_annotation) if (fsig.return_annotation is None) else fsig.return_annotation
 	_overloaded_functions_docstings[fname][fsig] = f.__doc__
 	#dplog([(dict(i), '—'*40) for i in _overloaded_functions[fname]], width=60) # XXX
 	def overloaded(*args, **kwargs):
@@ -365,45 +422,97 @@ def dispatch(f):
 			if (no): continue
 			if (not varkw and {i for i in kw if (not kw[i][1])}-pkw): continue
 
-			r = v(*args, **kwargs); break
+			r = \
+				v(*args, **kwargs)
+			break
 		else:
 			if (() in _overloaded_functions[fname]): r = _overloaded_functions[fname][()](*args, **kwargs)
-			else: raise DispatchError(f"Parameters {(*map(type, args), *map(type, kwargs.values()))} doesn't match any of '{fname}' signatures:\n{S(overloaded_format_signatures(fname, f.__qualname__, sep=endl)).indent(2, char=' ')}")
+			else:
+				ex = DispatchError(f"Parameters {S(', ').join((*map(type, args), *map(type, kwargs.values()))).join('()')} don't match any of '{fname}' signatures:\n{S(overloaded_format_signatures(fname, f.__qualname__, sep=endl)).indent(2, char=' ')}") # to hide in tb
+				raise ex
 		retval = _overloaded_functions_retval[fname][k]
 		if (retval is not inspect._empty and not isinstance(r, retval)):
 			raise DispatchError(f"Return value of type {type(r)} doesn't match return annotation of appropriate '{fname}' signature")
 		return r
-	overloaded.__name__, overloaded.__qualname__, overloaded.__module__, overloaded.__doc__, overloaded.__signature__, overloaded.__code__ = f"Overloaded {f.__name__}", f.__qualname__, f.__module__, (_overloaded_functions_docstings[fname][()]+'\n\n' if (() in _overloaded_functions_docstings[fname]) else '')+overloaded_format_signatures(fname, f.__qualname__), ..., type(overloaded.__code__)(overloaded.__code__.co_argcount, overloaded.__code__.co_kwonlyargcount, overloaded.__code__.co_nlocals, overloaded.__code__.co_stacksize, overloaded.__code__.co_flags, overloaded.__code__.co_code, overloaded.__code__.co_consts, overloaded.__code__.co_names, overloaded.__code__.co_varnames, overloaded.__code__.co_filename, f"<overloaded '{f.__qualname__}'>", overloaded.__code__.co_firstlineno, overloaded.__code__.co_lnotab, overloaded.__code__.co_freevars, overloaded.__code__.co_cellvars) # it's soooooo long :D
+	overloaded.__name__, overloaded.__qualname__, overloaded.__module__, overloaded.__doc__, overloaded.__signature__, overloaded.__code__ = f"Overloaded {f.__name__}", f.__qualname__, f.__module__, (_overloaded_functions_docstings[fname][()]+'\n\n' if (() in _overloaded_functions_docstings[fname]) else '')+overloaded_format_signatures(fname, f.__qualname__), ..., code_with(overloaded.__code__, name=f"<overload handler of '{f.__qualname__}'>")
+	f.__name__, f.__code__ = f"Overloaded {f.__name__}", code_with(f.__code__, name=f"<overloaded '{f.__qualname__}' for {f.__name__}{format_inspect_signature(fsig)}>")
 	return overloaded
 def dispatch_meta(f):
 	_overloaded_functions_docstings[f.__qualname__][()] = f.__doc__
 	return f
-def overloaded_format_signatures(fname, qualname, sep='\n\n'): return sep.join(Sstr().join((qualname, sig, ':\n\b    '+doc if (doc) else '')) for sig, doc in _overloaded_functions_docstings[fname].items())
+def overloaded_format_signatures(fname, qualname, sep='\n\n'): return sep.join(Sstr().join((qualname, format_inspect_signature(fsig), ':\n\b    '+doc if (doc) else '')) for fsig, doc in _overloaded_functions_docstings[fname].items())
+
+def format_inspect_signature(fsig):
+	result = list()
+	posonlysep = False
+	kwonlysep = True
+
+	for p in fsig.parameters.values():
+		if (p.kind == inspect.Parameter.POSITIONAL_ONLY): posonlysep = True
+		elif (posonlysep): result.append('/'); posonlysep = False
+		if (p.kind == inspect.Parameter.VAR_POSITIONAL): kwonlysep = False
+		elif (p.kind == inspect.Parameter.KEYWORD_ONLY and kwonlysep): result.append('*'); kwonlysep = False
+		result.append(f"{'*' if (p.kind == inspect.Parameter.VAR_POSITIONAL) else '**' if (p.kind == inspect.Parameter.VAR_KEYWORD) else ''}{p.name}{f': {inspect.formatannotation(p.annotation)}' if (p.annotation is not inspect._empty) else ''}{f' = {p.default}' if (p.annotation is not inspect._empty and p.default is not inspect._empty) else f'={p.default}' if (p.default is not inspect._empty) else ''}")
+
+	if (posonlysep): result.append('/')
+	rendered = ', '.join(result).join('()')
+	if (fsig.return_annotation is not inspect._empty): rendered += f" -> {inspect.formatannotation(fsig.return_annotation)}"
+	return rendered
 
 def cast_call(f, *args, **kwargs):
 	fsig = inspect.signature(f)
-	r = f(*((v.annotation)(args[ii]) if (v.annotation is not inspect._empty) else args[ii] for ii, (k, v) in enumerate(fsig.parameters.items()) if ii < len(args)), **{k: (fsig.parameters[k].annotation)(v) if (fsig.parameters[k].annotation is not inspect._empty) else v for k, v in kwargs.items()})
+	r = f(*((v.annotation)(args[ii]) if (v.annotation is not inspect._empty and not isinstance(args[ii], v.annotation)) else args[ii] for ii, (k, v) in enumerate(fsig.parameters.items()) if ii < len(args)), **{k: (fsig.parameters[k].annotation)(v) if (k in fsig.parameters and fsig.parameters[k].annotation is not inspect._empty and not isinstance(v, fsig.parameters[k].annotation)) else v for k, v in kwargs.items()})
 	return (fsig.return_annotation)(r) if (fsig.return_annotation is not inspect._empty) else r
 
-# Beware! leads to 'ndefined behavior when used with @dispatch
-def autocast(f): return lambda *args, **kwargs: cast_call(f, *args, **kwargs)
+def autocast(f):
+	""" Beware! leads to undefined behavior when used with @dispatch. """
+	r = lambda *args, **kwargs: cast_call(f, *args, **kwargs)
+	r.__annotations__ = f.__annotations__
+	return r
+
+def init_defaults(f):
+	""" Decorator that initializes type-annotated arguments which are not specified on function call.
+	You can also use lambdas as annotations.
+	Useful for initializing mutable defaults.
+	Note: you should not specify default values for these arguments or it will override the initialization.
+
+	Example:
+		@init_defaults
+		def f(x: list):
+			x.append(1)
+			return x
+		f() #--> [1]
+		a = f() #--> [1]
+		f(x=a) #--> [1, 1]
+
+	Has no bugs.
+	"""
+	return lambda *args, **kwargs: f(*args, **S(kwargs) & {k: v() for k, v in f.__annotations__.items() if k not in kwargs})
+	#fsig = inspect.signature(f)
+	#return lambda *args, **kwargs: f(*args, **S(kwargs) & {k: v.annotation() for k, v in fsig.parameters.items() if (k not in kwargs and v.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY) and v.annotation is not inspect._empty)})
 
 class cachedfunction:
 	def __init__(self, f):
 		self.f = f
 		self._cached = dict()
+		self._obj = None
+
+	def __get__(self, obj, objcls):
+		self._obj = obj
+		return self
 
 	def __call__(self, *args, **kwargs):
-		k = (args, tuple(sorted(kwargs.items())))
-		if (k not in self._cached):
-			self._cached[k] = self.f(*args, **kwargs)
+		k = tohashable((args, kwargs))
+		if (self._obj is not None): args = (self._obj, *args)
+		if (k not in self._cached): self._cached[k] = self.f(*args, **kwargs)
 		return self._cached[k]
+
+	def nocache(self, *args, **kwargs):
+		if (self._obj is not None): args = (self._obj, *args)
+		return self.f(*args, **kwargs)
 
 	def clear_cache(self):
 		self._cached.clear()
-
-# Здесь должен быть текст, но прибежал Лукин и его спёр
-#  25.03.19, 3:18
 
 class cachedproperty:
 	class _empty: __slots__ = ()
@@ -414,9 +523,19 @@ class cachedproperty:
 		self._cached = self._empty
 
 	def __get__(self, obj, objcls):
-		if (self._cached is self._empty):
-			self._cached = self.f(obj)
+		if (self._cached is self._empty): self._cached = self.f(obj)
 		return self._cached
+
+	def clear_cache(self):
+		self._cached.clear()
+
+def allsubclasses(cls):
+	""" Get all subclasses of class `cls' and its subclasses and so on recursively. """
+	return cls.__subclasses__()+[j for i in cls.__subclasses__() for j in allsubclasses(i)]
+
+def subclassdict(cls):
+	""" Get name-class mapping for subclasses of class `cls'. """
+	return {i.__name__: i for i in cls.__subclasses__()}
 
 def spreadargs(f, okwargs, *args, **akwargs):
 	fsig = inspect.signature(f)
@@ -428,6 +547,14 @@ def spreadargs(f, okwargs, *args, **akwargs):
 		except KeyError: pass
 	return f(*args, **kwargs)
 
+def init(*names):
+	def decorator(f):
+		def decorated(self, *args, **kwargs):
+			for i in names: setattr(self, i, kwargs.pop(i))
+			return f(self, *args, **kwargs)
+		return decorated
+	return decorator
+
 logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
 noesc = re.compile(r'\033\[?[0-?]*[ -/]*[@-~]?')
 logfile = None
@@ -437,21 +564,21 @@ _logged_utils_start = None
 def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, width=80, unlock=0, nolog=False): # TODO: finally rewrite me as class pls
 	""" Log anything. Print (formatted with datetime) to stderr and logfile (if set). Should be compatible with builtins.print().
 	Parameters:
-		l (optional): level, must be >= global loglevel to print to stderr rather than only to logfile (or /dev/null).
+		[l]: level, must be >= global loglevel to print to stderr rather than only to logfile (or /dev/null).
 		*x: print-like args, what to log.
 		sep: print-like separator.
 		end: print-like line end.
 		ll: formatted string instead of loglevel for output.
-		raw: flag, do not print datetime/loglevel prefix if set.
-		tm: specify datetime, time.time() if not set, nothing if False.
-		format: use pformat() on args if set.
+		raw: if true, do not print datetime/loglevel prefix if set.
+		tm: specify datetime, time.time() if not set, nothing if false.
+		format: if true, apply pformat() to args.
 		width: specify output line width for wrapping, autodetect from stderr if not specified.
-		unlock: [undocumented]
-		nolog: flag, force suppress printing to stderr.
+		unlock: if true, release all previously holded («locked») log messages.
+		nolog: if true, force suppress printing to stderr.
 	"""
 	global loglock, _logged_utils_start
 	if (isinstance(_logged_utils_start, tuple)): _logged_utils_start, _logstateargs = True, _logged_utils_start; logstart('Utils'); logstate(*_logstateargs)
-	_l, _x = map(copy.copy, (l, x))
+	_l, _x = l, x#map(copy.copy, (l, x))
 	if (l is None): l = ''
 	if (type(l) is not int): l, x = None, (l, *x)
 	if (x == ()): l, x = 0, (l,)
@@ -470,8 +597,9 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 		for i in _loglock[1]: log(*i[0], **i[1], unlock=_loglock[0])
 	return clearstr
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
-def dlog(*args, **kwargs): parseargs(kwargs, ll='\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m'); return log(*args, **kwargs)
-def dplog(*args, **kwargs): parseargs(kwargs, format=True); return dlog(*args, **kwargs)
+def dlog(*args, **kwargs): parseargs(kwargs, ll='\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m', tm=''); return log(*((args[0] if (args[0] is not None) else repr(args[0]),) if (args) else ()), *args[1:], **kwargs)
+def dplog(*args, **kwargs): parseargs(kwargs, format=True, sep='\n'); return dlog(*args, **kwargs)
+def rlog(*args, **kwargs): parseargs(kwargs, raw=True); return log(*args, **kwargs)
 def logdumb(**kwargs): return log(raw=True, end='', **kwargs)
 def logstart(x):
 	""" from utils import *; logstart(name) """
@@ -500,10 +628,11 @@ _exc_handlers = set()
 def register_exc_handler(f): _exc_handlers.add(f)
 _logged_exceptions = set()
 @dispatch
-def exception(ex: BaseException, once=False, nolog=False):
+def exception(ex: BaseException, once=False, raw=False, nolog=False):
 	""" Log an exception.
-	ex: exception to log.
-	nolog: no not call exc_handlers.
+	Parameters:
+		ex: exception to log.
+		nolog: no not call exc_handlers.
 	"""
 	ex = unraise(ex)
 	if (isinstance(ex, NonLoggingException)): return
@@ -511,15 +640,14 @@ def exception(ex: BaseException, once=False, nolog=False):
 		if (repr(ex) in _logged_exceptions): return
 		_logged_exceptions.add(repr(ex))
 	exc = repr(ex).split('(')[0]
-	e = log(('\033[91mCaught ' if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+f"{exc}{(' on line '+'→'.join(map(lambda x: str(x[1]), traceback.walk_tb(ex.__traceback__)))).rstrip(' on line')}\033[0m{(': '+str(ex))*bool(str(ex))}")
+	e = log(('\033[91mCaught ' if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+f"{exc}{(' on line '+'→'.join(map(lambda x: str(x[1]), traceback.walk_tb(ex.__traceback__)))).rstrip(' on line')}\033[0m{(': '+str(ex))*bool(str(ex))}", raw=raw)
 	if (nolog): return
 	for i in _exc_handlers:
 		try: i(e, ex)
 		except Exception: pass
 logexception = exception
 
-@dispatch
-def raise_(ex: BaseException): raise ex
+def raise_(ex): raise ex
 
 @dispatch
 def unraise(ex: BaseException): return ex
@@ -529,16 +657,19 @@ def unraise(ex: type):
 	return ex()
 
 @dispatch
-def catch(*ex: type):
-	if (not all(issubclass(i, BaseException) for i in ex)): raise TypeError()
+def catch(*ex: BaseException):
 	def decorator(f):
-		def wrapped(*args, **kwargs):
-			try: return f(*args, **kwargs)
-			except ex: pass
-		return wrapped
+		def decorated(*args, **kwargs):
+			with contextlib.suppress(*ex):
+				return f(*args, **kwargs)
+		return decorated
 	return decorator
 @dispatch
 def catch(f: function): return catch(BaseException)(f)
+
+@dispatch
+def suppress(*ex: BaseException):
+	raise TODO
 
 def assert_(x): assert x; return True
 
@@ -739,6 +870,8 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 	def stop(self):
 		self.stopped = True
 		self.join()
+		sys.stderr.write('\r\033[K')
+		sys.stderr.flush()
 
 def progrange(start, stop=None, step=1):
 	if (stop is None): start, stop = 0, start
@@ -857,14 +990,12 @@ def frame(x, c=' ', j='.'): # j: {'<', '.', '>'}
 def iter_queue(q):
 	while (q.qsize()): yield q.get()
 
+def first(l): return next(iter(l))
+
 def pm(x): return 1 if (x) else -1
-def constrain(x, lb, ub):
-	r = min(ub, max(lb, x))
-	return r
-def prod(x):
-	r = 1
-	for i in x: r *= i
-	return r
+def constrain(x, lb, ub): return min(ub, max(lb, x))
+def prod(x, initial=1): return functools.reduce(operator.mul, x, initial)
+def average(x, default=None): return sum(x)/len(x) if (x) else default if (default is not None) else raise_(ValueError("average() arg is an empty sequence"))
 
 global_lambdas = list() # dunno why
 def global_lambda(l): global_lambdas.append(l); return global_lambdas[-1]
@@ -873,35 +1004,235 @@ class lc:
 	def __init__(self, lc):
 		self.lc = lc
 
-	def __enter__(self, *args, **kwargs):
+	def __enter__(self):
 		self.pl = locale.setlocale(locale.LC_ALL)
 		locale.setlocale(locale.LC_ALL, self.lc)
 
-	def __exit__(self, *args, **kwargs):
+	def __exit__(self, type, value, tb):
 		locale.setlocale(locale.LC_ALL, self.pl)
 
 class ll:
 	def __init__(self, ll):
 		self.ll = ll
 
-	def __enter__(self, *args, **kwargs):
+	def __enter__(self):
 		self.pl = loglevel
 		setloglevel(self.ll)
 
-	def __exit__(self, *args, **kwargs):
+	def __exit__(self, type, value, tb):
 		setloglevel(self.pl)
+
+class timecounter:
+	def __init__(self):
+		self.started = None
+		self.ended = None
+
+	def __enter__(self):
+		self.started = time.time()
+		return self
+
+	def __exit__(self, type, value, tb):
+		self.ended = time.time()
+
+	def time(self):
+		if (self.started is None): return 0
+		if (self.ended is None): return time.time()-self.started
+		return self.ended-self.started
 
 class classproperty:
 	def __init__(self, f):
 		self.f = f
 
-	def __get__(self, obj, owner):
-		return self.f(owner)
+	def __get__(self, obj, cls):
+		return self.f(cls)
+
+class itemget:
+	__slots__ = ('f',)
+
+	class getter:
+		__slots__ = ('obj', 'f')
+
+		def __init__(self, obj, f):
+			self.obj, self.f = obj, f
+
+		def __getitem__(self, x):
+			return self.f(self.obj, *(x if (isinstance(x, tuple)) else (x,)))
+
+	def __init__(self, f):
+		self.f = f
+
+	def __get__(self, obj, cls):
+		return self.getter(obj, self.f)
+
+class staticitemget:
+	__slots__ = ('f', '_fkeys')
+
+	def __init__(self, f):
+		self.f = f
+		self._fkeys = lambda self: ()
+
+	def __getitem__(self, x):
+		return self.f(*x) if (isinstance(x, tuple)) else self.f(x)
+
+	def __contains__(self, x):
+		if (x in self.keys()): return True
+		try: self[x]
+		except KeyError: return False
+		else: return True
+
+	def fkeys(self, f):
+		self._fkeys = f
+		return f
+
+	def keys(self):
+		return self._fkeys(self)
+
+class Builder:
+	def __init__(self, cls, *args, **kwargs):
+		self.cls = cls
+		self.calls = queue.Queue()
+		self.calls.put(args)
+		self.calls.put(kwargs)
+		self.i = None
+
+	def __getattr__(self, x):
+		if (self.i is not None): return getattr(self.i, x)
+		self.calls.put(x)
+		return self._putargs
+
+	def _putargs(self, *args, **kwargs):
+		put = self.calls.put
+		put(args)
+		put(kwargs)
+		return self
+
+	def build(self):
+		calls = self.calls
+		get = calls.get
+
+		i = self.cls(*get(), **get())
+		while (not calls.empty()):
+			getattr(i, get())(*get(), **get())
+
+		self.i = i
+		return i
+
+def instantiate(f):
+	""" Decorator that replaces type returned by decorated function with instance of that type and leaves it as is if it is not a type. """
+	def decorated(*args, **kwargs):
+		r = f(*args, **kwargs)
+		return r() if (isinstance(r, type)) else r
+	return decorated
+
+class hashabledict(dict):
+	__setitem__ = \
+	__delitem__ = \
+	clear = \
+	pop = \
+	popitem = \
+	setdefault = \
+	update = classmethod(lambda cls, *args, **kwargs: raise_(TypeError(f"'{cls.__name__}' object is not modifiable")))
+
+	def __hash__(self):
+		return hash(tuple(self.items()))
+
+@dispatch
+def tohashable(d: typing.Dict): return tuple(sorted((k, tohashable(v)) for k, v in d.items()))
+@dispatch
+def tohashable(s: str): return s
+@dispatch
+def tohashable(l: typing.Iterable): return tuple(map(tohashable, l))
+@dispatch
+def tohashable(x: typing.Hashable): return x
+
+class paramset(set):
+	def __init__(self, x=()):
+		super().__init__(map(str, x))
+
+	def __hash__(self):
+		return hash(tuple(sorted(self)))
+
+	def __getattr__(self, x):
+		return str(x) in self
+	__getitem__ = __getattr__
+
+	def __setattr__(self, x, y):
+		if (y): self.add(str(x))
+	__setitem__ = __setattr__
+
+	def __delattr__(self, x):
+		self.discard(str(x))
+	__delitem__ = __delattr__
+
+class listmap:
+	def __init__(self):
+		self._keys = collections.deque()
+		self._values = collections.deque()
+
+	def __getitem__(self, k):
+		return self._values[self._keys.index(k)]
+
+	def __setitem__(self, k, v):
+		if (k in self._keys): self._values[self._keys.index(k)]
+		else:
+			self._keys.append(k)
+			self._values.append(v)
+
+	def __contains__(self, k):
+		return k in self._keys
+
+	def __iter__(self):
+		return iter(self._keys)
+
+	def index(self, x):
+		return self._keys.index(x)
+
+	def keys(self):
+		return self._keys
+
+	def values(self):
+		return self._values
+
+	def items(self):
+		for k in self.keys():
+			yield (k, self[k])
+
+class indexset:
+	def __init__(self):
+		self._list = list()
+
+	def __getitem__(self, x):
+		try: return self._list.index(x)
+		except ValueError:
+			self._list.append(x)
+			return len(self._list)-1
+
+	def __delitem__(self, x):
+		self._list.remove(x)
+
+	@itemget
+	def values(self, x):
+		return self._list[x]
+
+#class fields(abc.ABC):
+#	""" A collections.namedtuple-like structure with attribute initialization and type casting.
+#	Based on init_defaults() and autocast().
+#	You should declare subclasses as:
+#	class C(fields):
+#		__fields__ = {'a': None, 'b': int}
+#	"""
+#
+#	__fields__ = type('__fields__', (), {'__isabstractmethod__': True})()
+#
+#	def __init__(self, **kwargs):
+#		for k, v in self.__fields__.items():
+#			setattr(self, k, kwargs[k])
 
 def preeval(f):
         r = f()
         return lambda: r
 
+def printf(format, *args, file=sys.stdout, flush=False): print(format % args, end='', file=file, flush=flush)
 class _CStream: # because I can.
 	@dispatch
 	def __init__(self, fd):
@@ -931,7 +1262,7 @@ cerr = OStream(sys.stderr)
 cio = IOStream(sys.stdin, sys.stdout)
 
 class UserError(Exception): pass
-class WTFException(Exception): pass
+class WTFException(AssertionError): pass
 class TODO(NotImplementedError): pass
 class TEST(BaseException): pass
 class NonLoggingException(Exception): pass

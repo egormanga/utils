@@ -75,12 +75,12 @@ print('f() no cache:', round(time.time()-start, 4), 'sec')
 start = time.time()
 for i in range(100): fcf()
 print('f() cachedfunction():', round(time.time()-start, 4), 'sec')
-assert time.time()-start < 0.1
+assert time.time()-start < 0.5
 
 start = time.time()
 for i in range(100): fpe()
 print('f() preeval():', round(time.time()-start, 4), 'sec')
-assert time.time()-start < 0.0001
+assert time.time()-start < 0.001
 
 log('cached*() test ok\n')
 
