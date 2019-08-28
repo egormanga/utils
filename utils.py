@@ -268,7 +268,7 @@ class Sint(Stype, int):
 
 class Sstr(Stype, str):
 	def __getitem__(self, x):
-		return Sstr(self[x])
+		return Sstr(str.__getitem__(self, x))
 
 	def __and__(self, x):
 		return Sstr().join(i for i in self if i in x)
