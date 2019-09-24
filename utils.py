@@ -736,7 +736,7 @@ class DB:
 		if (backup):
 			try: os.mkdir('backup')
 			except FileExistsError: pass
-			try: shutil.copyfile(self.file.name, f"backup/{self.file.name if (hasattr(self.file, 'name')) else ''}_{time.time()}.db")
+			try: shutil.copyfile(self.file.name, f"backup/{self.file.name if (hasattr(self.file, 'name')) else ''}_{int(time.time())}.db")
 			except OSError: pass
 		try: dill.dump(db or {field: self.fields[field][field] for field in self.fields}, self.file)
 		except Exception as ex:
