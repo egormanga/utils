@@ -41,9 +41,12 @@ _imports = (
 	'abc',
 	'ast',
 	'bs4',
+	'cmd',
 	'dis',
 	'pip',
+	'pty',
 	'sys',
+	'tty',
 	'code',
 	'copy',
 	'dill',
@@ -59,7 +62,9 @@ _imports = (
 	'base64',
 	'bidict',
 	'codeop',
+	'getkey',
 	'locale',
+	'parser',
 	'pickle',
 	'psutil',
 	'random',
@@ -78,17 +83,21 @@ _imports = (
 	'marshal',
 	'numbers',
 	'os.path',
+	'termios',
+	'zipfile',
 	'argparse',
 	'attrdict',
 	'builtins',
 	'datetime',
 	'operator',
+	'platform',
 	'readline',
 	'requests',
 	'fractions',
 	'functools',
 	'importlib',
 	'itertools',
+	'pyparsing',
 	'threading',
 	'traceback',
 	'contextlib',
@@ -131,7 +140,7 @@ endl = '\n'
 
 def isiterable(x): return isinstance(x, typing.Iterable)
 def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
-def isnumber(x): return isinstance(x, (int, float))
+def isnumber(x): return isinstance(x, (int, float, complex))
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args); return kwargs
 def hex(x, l=2): return '0x%%0%dX' % l % x
 
@@ -267,6 +276,58 @@ class Sint(Stype, int):
 		return f"+{self}" if (self > 0) else str(self)
 
 class Sstr(Stype, str):
+	_subtrans = str.maketrans({
+		'0': '₀',
+		'1': '₁',
+		'2': '₂',
+		'3': '₃',
+		'4': '₄',
+		'5': '₅',
+		'6': '₆',
+		'7': '₇',
+		'8': '₈',
+		'9': '₉',
+		'+': '₊',
+		'-': '₋',
+		'=': '₌',
+		'(': '₍',
+		')': '₎',
+		'a': 'ₐ',
+		'e': 'ₑ',
+		'o': 'ₒ',
+		'x': 'ₓ',
+		'ə': 'ₔ',
+		'h': 'ₕ',
+		'k': 'ₖ',
+		'l': 'ₗ',
+		'm': 'ₘ',
+		'n': 'ₙ',
+		'p': 'ₚ',
+		's': 'ₛ',
+		't': 'ₜ',
+	})
+
+	_suptrans = str.maketrans({
+		'0': '⁰',
+		'1': '¹',
+		'2': '²',
+		'3': '³',
+		'4': '⁴',
+		'5': '⁵',
+		'6': '⁶',
+		'7': '⁷',
+		'8': '⁸',
+		'9': '⁹',
+		'.': '·',
+		'+': '⁺',
+		'-': '⁻',
+		'=': '⁼',
+		'(': '⁽',
+		')': '⁾',
+		'i': 'ⁱ',
+		'n': 'ⁿ',
+	})
+
 	def __getitem__(self, x):
 		return Sstr(str.__getitem__(self, x))
 
@@ -335,57 +396,35 @@ class Sstr(Stype, str):
 		return Sstr().join(s)
 
 	def sub(self):
-		return self.translate({
-			ord('0'): '₀',
-			ord('1'): '₁',
-			ord('2'): '₂',
-			ord('3'): '₃',
-			ord('4'): '₄',
-			ord('5'): '₅',
-			ord('6'): '₆',
-			ord('7'): '₇',
-			ord('8'): '₈',
-			ord('9'): '₉',
-		})
+		return self.translate(self._subtrans)
 
 	def super(self): logexception(DeprecationWarning(" *** super() → sup() *** ")); return self.sup()
 	def sup(self):
-		return self.translate({
-			ord('0'): '⁰',
-			ord('1'): '¹',
-			ord('2'): '²',
-			ord('3'): '³',
-			ord('4'): '⁴',
-			ord('5'): '⁵',
-			ord('6'): '⁶',
-			ord('7'): '⁷',
-			ord('8'): '⁸',
-			ord('9'): '⁹',
-			ord('.'): '·',
-		})
+		return self.translate(self._suptrans)
 
 def Sbool(x=bool(), *args, **kwargs): # No way to derive a class from bool
 	x = S(x)
 	return x.bool(*args, **kwargs) if (hasattr(x, 'bool')) else bool(x)
 
 def code_with(code, **kwargs): return CodeType(*(kwargs.get(i, getattr(code, 'co_'+i)) for i in ('argcount', 'kwonlyargcount', 'nlocals', 'stacksize', 'flags', 'code', 'consts', 'names', 'varnames', 'filename', 'name', 'firstlineno', 'lnotab', 'freevars', 'cellvars')))
+# TODO: func_with()
 
 class DispatchFillValue: pass
 class DispatchError(TypeError): pass
 def dispatch_typecheck(o, t):
-	# TODO: Come on, just one single if! (just test it)
-	#return t is None or t is inspect._empty or not isinstance(o, DispatchFillValue) and not isinstance(t, DispatchFillValue) and isinstance(o, (typing_inspect.get_constraints(t) or type(o)) if (isinstance(t, typing.TypeVar)) else typing_inspect.get_origin(t) or t) and (not isinstance(o, typing.Tuple) or not typing_inspect.get_origin(t) or not issubclass(typing_inspect.get_origin(t), typing.Tuple) or not typing_inspect.get_args(t) or all(itertools.starmap(dispatch_typecheck, itertools.zip_longest(o, typing_inspect.get_args(t), fillvalue=DispatchFillValue())))) and (not isinstance(o, typing.Iterable) or isinstance(o, (typing.Tuple, typing.Iterator)) or isinstance(o, str) or not typing_inspect.get_args(t) or all(dispatch_typecheck(i, typing_inspect.get_args(t)[0]) for i in o))
 	if (t is None or t is inspect._empty): return True
 	if (isinstance(o, DispatchFillValue) or isinstance(t, DispatchFillValue)): return False
+	if (isinstance(t, function)): return bool(t(o))
 	if (not isinstance(o, (typing_inspect.get_constraints(t) or type(o)) if (isinstance(t, typing.TypeVar)) else typing_inspect.get_origin(t) or t)): return False
 	if (isinstance(o, typing.Tuple) and typing_inspect.get_origin(t) and issubclass(typing_inspect.get_origin(t), typing.Tuple) and typing_inspect.get_args(t) and not all(itertools.starmap(dispatch_typecheck, itertools.zip_longest(o, typing_inspect.get_args(t), fillvalue=DispatchFillValue())))): return False
-	if (isinstance(o, typing.Iterable) and not isinstance(o, (typing.Tuple, typing.Iterator)) and not isinstance(o, str) and typing_inspect.get_args(t) and not all(dispatch_typecheck(i, typing_inspect.get_args(t)[0]) for i in o)): return False
+	if (isinstance(o, typing.Iterable) and not isinstance(o, (typing.Iterator)) and typing_inspect.get_args(t) and not all(dispatch_typecheck(i, typing_inspect.get_args(t)[0]) for i in o)): return False
 	return True
 _overloaded_functions = Sdict(dict)
 _overloaded_functions_retval = Sdict(dict)
 _overloaded_functions_docstings = Sdict(dict)
 def dispatch(f):
 	fname = f.__qualname__
+	if (getattr(f, '__signature__', None) == ...): del f.__signature__ # TODO FIXME ???
 	fsig = inspect.signature(f)
 	params_annotation = tuple((i[0], (None if (i[1].annotation is inspect._empty) else i[1].annotation, i[1].default is not inspect._empty, i[1].kind)) for i in fsig.parameters.items())
 	_overloaded_functions[fname][params_annotation] = f
@@ -438,7 +477,7 @@ def dispatch(f):
 	f.__name__, f.__code__ = f"Overloaded {f.__name__}", code_with(f.__code__, name=f"<overloaded '{f.__qualname__}' for {f.__name__}{format_inspect_signature(fsig)}>")
 	return overloaded
 def dispatch_meta(f):
-	_overloaded_functions_docstings[f.__qualname__][()] = f.__doc__
+	if (f.__doc__): _overloaded_functions_docstings[f.__qualname__][()] = f.__doc__
 	return f
 def overloaded_format_signatures(fname, qualname, sep='\n\n'): return sep.join(Sstr().join((qualname, format_inspect_signature(fsig), ':\n\b    '+doc if (doc) else '')) for fsig, doc in _overloaded_functions_docstings[fname].items())
 
@@ -529,13 +568,41 @@ class cachedproperty:
 	def clear_cache(self):
 		self._cached.clear()
 
-def allsubclasses(cls):
+@dispatch
+def allsubclasses(cls: type):
 	""" Get all subclasses of class `cls' and its subclasses and so on recursively. """
 	return cls.__subclasses__()+[j for i in cls.__subclasses__() for j in allsubclasses(i)]
+@dispatch
+def allsubclasses(obj): return allsubclasses(type(obj))
 
-def subclassdict(cls):
+@dispatch
+def subclassdict(cls: type):
 	""" Get name-class mapping for subclasses of class `cls'. """
 	return {i.__name__: i for i in cls.__subclasses__()}
+@dispatch
+def subclassdict(obj): return subclassdict(type(obj))
+
+def funcdecorator(df):
+	def ndf(f, *args, **kwargs):
+		if (not isinstance(f, function)): return lambda nf: ndf(nf, f, *args, **kwargs)
+		nf = df(f)
+		nf.__name__, nf.__qualname__, nf.__module__, nf.__doc__, nf.__signature__ = \
+		 f.__name__,  f.__qualname__,  f.__module__,  f.__doc__, inspect.signature(f)
+		nf.__code__ = code_with(nf.__code__, name=f"<decorated '{f.__code__.co_name}'>" if (not f.__code__.co_name.startswith('<decorated ')) else f.__code__.co_name)
+		for i in filter(lambda x: not x.startswith('__'), dir(f)):
+			setattr(nf, i, getattr(f, i))
+		return nf
+
+	#dfsig, ndfsig = inspect.signature(df), inspect.signature(ndf)
+	#if (dfsig != ndfsig): raise \ # TODO kwargs
+	#	ValueError(f"Function decorated with @funcdecorator should have signature '{format_inspect_signature(ndfsig)}' (got: '{format_inspect_signature(dfsig)}')")
+
+	ndf.__name__, ndf.__qualname__, ndf.__module__, ndf.__doc__, ndf.__code__ = \
+	 df.__name__,  df.__qualname__,  df.__module__,  df.__doc__, code_with(ndf.__code__, name=df.__code__.co_name)
+	for i in filter(lambda x: not x.startswith('__'), dir(df)):
+		setattr(nff, i, getattr(df, i))
+
+	return ndf
 
 def spreadargs(f, okwargs, *args, **akwargs):
 	fsig = inspect.signature(f)
@@ -548,6 +615,7 @@ def spreadargs(f, okwargs, *args, **akwargs):
 	return f(*args, **kwargs)
 
 def init(*names):
+	@funcdecorator
 	def decorator(f):
 		def decorated(self, *args, **kwargs):
 			for i in names: setattr(self, i, kwargs.pop(i))
@@ -639,7 +707,7 @@ def exception(ex: BaseException, once=False, raw=False, nolog=False):
 	if (once):
 		if (repr(ex) in _logged_exceptions): return
 		_logged_exceptions.add(repr(ex))
-	exc = repr(ex).split('(')[0]
+	exc = repr(ex).partition('(')[0]
 	e = log(('\033[91mCaught ' if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+f"{exc}{(' on line '+'→'.join(map(lambda x: str(x[1]), traceback.walk_tb(ex.__traceback__)))).rstrip(' on line')}\033[0m{(': '+str(ex))*bool(str(ex))}", raw=raw)
 	if (nolog): return
 	for i in _exc_handlers:
@@ -658,6 +726,7 @@ def unraise(ex: type):
 
 @dispatch
 def catch(*ex: BaseException):
+	@funcdecorator
 	def decorator(f):
 		def decorated(*args, **kwargs):
 			with contextlib.suppress(*ex):
@@ -688,8 +757,9 @@ clear = _clear()
 class DB:
 	""" All-in-one lightweight database class. """
 
-	def __init__(self, file=None):
+	def __init__(self, file=None, serializer=pickle):
 		self.setfile(file)
+		self.setserializer(serializer)
 		self.fields = dict()
 		self.setnolog(False)
 		self.setbackup(True)
@@ -708,6 +778,10 @@ class DB:
 	def setbackup(self, backup):
 		self.backup = bool(backup)
 
+	@dispatch
+	def setserializer(self, serializer: module):
+		self.serializer = serializer
+
 	def register(self, *fields):
 		globals = inspect.stack()[1][0].f_globals
 		for field in fields: self.fields[field] = globals
@@ -717,7 +791,7 @@ class DB:
 		if (not self.file): return
 		if (not nolog): logstart('Loading database')
 		db = dict()
-		try: db = dill.load(self.file);
+		try: db = self.serializer.load(self.file);
 		except EOFError:
 			if (not nolog): logwarn('database is empty')
 		else:
@@ -738,7 +812,7 @@ class DB:
 			except FileExistsError: pass
 			try: shutil.copyfile(self.file.name, f"backup/{self.file.name if (hasattr(self.file, 'name')) else ''}_{int(time.time())}.db")
 			except OSError: pass
-		try: dill.dump(db or {field: self.fields[field][field] for field in self.fields}, self.file)
+		try: self.serializer.dump(db or {field: self.fields[field][field] for field in self.fields}, self.file)
 		except Exception as ex:
 			if (not nolog): logex(ex)
 		else:
@@ -827,8 +901,8 @@ class ProgressPool:
 		self.ranges.pop()
 
 	@dispatch
-	def iter(self, iterator: typing.Iterator, l: int):
-		yield from (next(iterator) for _ in self.range(l))
+	def iter(self, iterator: typing.Iterator, l: int, step: int = 1):
+		yield from (next(iterator) for _ in self.range(l, step=step))
 
 	@dispatch
 	def iter(self, iterable: typing.Iterable):
@@ -846,6 +920,13 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 		self.stopped = bool()
 		self.cvs = [int()]*len(self.p)
 		self.ranges = int()
+
+	def __enter__(self):
+		self.start()
+		return self
+
+	def __exit__(self, type, value, tb):
+		self.stop()
 
 	def run(self):
 		while (not self.stopped):
@@ -1090,39 +1171,86 @@ class staticitemget:
 class Builder:
 	def __init__(self, cls, *args, **kwargs):
 		self.cls = cls
-		self.calls = queue.Queue()
-		self.calls.put(args)
-		self.calls.put(kwargs)
-		self.i = None
+		self.calls = collections.deque(((None, args, kwargs),))
+
+	def __repr__(self):
+		return f"<Builder of {repr(self.cls).strip('<>')}>"
 
 	def __getattr__(self, x):
-		if (self.i is not None): return getattr(self.i, x)
-		self.calls.put(x)
-		return self._putargs
-
-	def _putargs(self, *args, **kwargs):
-		put = self.calls.put
-		put(args)
-		put(kwargs)
-		return self
+		return lambda *args, **kwargs: self.calls.append((x, args, kwargs)) and None or self
 
 	def build(self):
-		calls = self.calls
-		get = calls.get
+		instance = None
+		for method, args, kwargs in self.calls:
+			if (instance is None): instance = self.cls(*args, **kwargs)
+			else: getattr(instance, method)(*args, **kwargs)
+		return instance
 
-		i = self.cls(*get(), **get())
-		while (not calls.empty()):
-			getattr(i, get())(*get(), **get())
+class MetaBuilder(type):
+	class Var:
+		def __init__(self, name):
+			self.name = name
 
-		self.i = i
-		return i
+		def __repr__(self):
+			return f"<Var '{self.name}'>"
 
+	def __prepare__(name, bases):
+		return type('', (dict,), {'__getitem__': lambda self, x: MetaBuilder.Var(x[2:]) if (x.startswith('a_') and x[2:]) else dict.__getitem__(self, x)})()
+
+@funcdecorator
 def instantiate(f):
 	""" Decorator that replaces type returned by decorated function with instance of that type and leaves it as is if it is not a type. """
 	def decorated(*args, **kwargs):
 		r = f(*args, **kwargs)
 		return r() if (isinstance(r, type)) else r
 	return decorated
+
+def singleton(C): return C()
+
+@cachedfunction
+def getsubparser(ap, *args, **kwargs): return ap.add_subparsers(*args, **kwargs)
+
+@dispatch
+@funcdecorator
+def apmain(f, nolog=False):
+	def decorated():
+		if (hasattr(f, '_argdefs')):
+			for args, kwargs in f._argdefs:
+				argparser.add_argument(*args, **kwargs)
+		argparser.set_defaults(func=lambda *_: sys.exit(argparser.print_help()))
+		cargs = argparser.parse_args()
+		if (not nolog): logstarted()
+		return f(cargs)
+	return decorated
+
+def apcmd(*args, **kwargs):
+	@funcdecorator
+	def decorator(f):
+		nonlocal args, kwargs
+		if (not hasattr(f, '_argdefs')): raise \
+			ValueError(f"Function decorated with @apcmd should also be decorated with @aparg")
+		subparser = getsubparser(argparser, *args, **kwargs).add_parser(f.__name__, help=f.__doc__)
+		for args, kwargs in f._argdefs:
+			subparser.add_argument(*args, **kwargs)
+		subparser.set_defaults(func=f._f)
+		return f._f
+	return decorator
+
+def aparg(*args, **kwargs):
+	@funcdecorator
+	def decorator(f):
+		if (not hasattr(f, '_argdefs')):
+			of = f
+			def f(cargs):
+				for args, kwargs in f._argdefs:
+					argparser.add_argument(*args, **kwargs)
+				cargs = argparser.parse_args()
+				return of(cargs)
+			f._argdefs = collections.deque()
+			f._f = of
+		f._argdefs.appendleft((args, kwargs))
+		return f
+	return decorator
 
 class hashabledict(dict):
 	__setitem__ = \
@@ -1227,6 +1355,10 @@ class indexset:
 #	def __init__(self, **kwargs):
 #		for k, v in self.__fields__.items():
 #			setattr(self, k, kwargs[k])
+
+def getsrc(x, clear_term=True):
+	if (clear_term): clear()
+	print(inspect.getsource(x))
 
 def preeval(f):
         r = f()
