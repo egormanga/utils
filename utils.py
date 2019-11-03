@@ -56,6 +56,7 @@ _imports = (
 	'math',
 	'stat',
 	'time',
+	'uuid',
 	'zlib',
 	'queue',
 	'regex',
@@ -93,6 +94,7 @@ _imports = (
 	'platform',
 	'readline',
 	'requests',
+	'tempfile',
 	'fractions',
 	'functools',
 	'importlib',
@@ -162,6 +164,12 @@ class Sdict(Stype, collections.defaultdict):
 		super().__init__(*args, **kwargs)
 
 	__repr__ = dict.__repr__
+
+	def __getattr__(self, x):
+		return self[x]
+
+	def __setattr__(self, x, v):
+		self[x] = v
 
 	def __and__(self, x):
 		""" Return self with applied .update(x). """
@@ -659,7 +667,7 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	if (ll is None): ll = f'[\033[1m{lc}LV{l}\033[0;96m]' if (l is not None) else ''
 	logstr = f"\033[K\033[96m{time.strftime('[%x %X] ', tm) if (tm) else ''}\033[0;96m{ll}\033[0;1m{' '*bool(ll)+x if (x != '') else ''}\033[0m{end}" if (not raw) else str(x)+end
 	if (logfile and not nolog): logfile.write(logstr)
-	if (l is None or l <= loglevel): logoutput.write(logstr); logoutput.flush()
+	if ((l or 0) <= loglevel): logoutput.write(logstr); logoutput.flush()
 	if (unlock and loglock[-1][0] == unlock):
 		_loglock = loglock.pop()
 		for i in _loglock[1]: log(*i[0], **i[1], unlock=_loglock[0])
