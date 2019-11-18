@@ -114,11 +114,15 @@ for i in _imports: Simport(*i.split()[::2])
 del i, Simport # TODO FIXME? (inspect.stack() is too slow)
 
 def install_all_imports():
+	r = list()
 	for i in _imports:
 		i = i.partition(' ')[0]
 		if (i in sys.modules): continue
 		try: __import__(i)
-		except ModuleNotFoundError: pip.main(['install', i])
+		except ModuleNotFoundError: r.append(i)
+	old_sysargv, sys.argv = sys.argv, ['pip3', 'install']+r
+	try: __import__('pkg_resources').load_entry_point('pip', 'console_scripts', 'pip3')()
+	finally: sys.argv = old_sysargv
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
 
@@ -159,8 +163,7 @@ class Stype: pass
 class Sdict(Stype, collections.defaultdict):
 	def __init__(self, *args, **kwargs):
 		args = list(args)
-		if (args and isiterable(args[0])): args.insert(0, None)
-		if (not args): args.insert(0, None)
+		if (not args or isiterable(args[0])): args.insert(0, None)
 		super().__init__(*args, **kwargs)
 
 	__repr__ = dict.__repr__
@@ -236,9 +239,9 @@ class Slist(Stype, list):
 	def copy(self):
 		return Slist(self)
 
-	def rindex(self, x, start=0):
-		l = len(self)-1
-		return l-self[::-1].index(x, 0, l-start)
+	def rindex(self, x, start=0): # TODO FIXME
+		l = len(self)
+		return l-self.index(x, 0, l-start)-1
 
 	def group(self, n):
 		return Slist((*(j for j in i if (j is not None)),) for i in itertools.zip_longest(*[iter(self)]*n))
@@ -414,7 +417,9 @@ def Sbool(x=bool(), *args, **kwargs): # No way to derive a class from bool
 	x = S(x)
 	return x.bool(*args, **kwargs) if (hasattr(x, 'bool')) else bool(x)
 
-def code_with(code, **kwargs): return CodeType(*(kwargs.get(i, getattr(code, 'co_'+i)) for i in ('argcount', 'kwonlyargcount', 'nlocals', 'stacksize', 'flags', 'code', 'consts', 'names', 'varnames', 'filename', 'name', 'firstlineno', 'lnotab', 'freevars', 'cellvars')))
+def code_with(code, **kwargs):
+	if (sys.version_info >= (3, 8)): return code.replace(**{'co_'+k: v for k, v in kwargs.items()})
+	return CodeType(*(kwargs.get(i, getattr(code, 'co_'+i)) for i in ('argcount', 'kwonlyargcount', 'nlocals', 'stacksize', 'flags', 'code', 'consts', 'names', 'varnames', 'filename', 'name', 'firstlineno', 'lnotab', 'freevars', 'cellvars')))
 # TODO: func_with()
 
 class DispatchFillValue: pass
@@ -538,7 +543,7 @@ def init_defaults(f):
 	#fsig = inspect.signature(f)
 	#return lambda *args, **kwargs: f(*args, **S(kwargs) & {k: v.annotation() for k, v in fsig.parameters.items() if (k not in kwargs and v.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY) and v.annotation is not inspect._empty)})
 
-class cachedfunction:
+class cachedfunction: # TODO FIXME DEPRECATION (--> @functools.lru_cache; ~100 times faster)
 	def __init__(self, f):
 		self.f = f
 		self._cached = dict()
@@ -561,7 +566,7 @@ class cachedfunction:
 	def clear_cache(self):
 		self._cached.clear()
 
-class cachedproperty:
+class cachedproperty: # TODO FIXME DEPRECATION (--> @functools.cached_property; ~100 times faster)
 	class _empty: __slots__ = ()
 	_empty = _empty()
 
@@ -1169,6 +1174,9 @@ class staticitemget:
 		except KeyError: return False
 		else: return True
 
+	def __call__(self, *args, **kwargs):
+		return self.f(*args, **kwargs)
+
 	def fkeys(self, f):
 		self._fkeys = f
 		return f
@@ -1218,12 +1226,13 @@ def singleton(C): return C()
 @cachedfunction
 def getsubparser(ap, *args, **kwargs): return ap.add_subparsers(*args, **kwargs)
 
-@dispatch
+#@dispatch
 @funcdecorator
 def apmain(f, nolog=False):
 	def decorated():
 		if (hasattr(f, '_argdefs')):
-			for args, kwargs in f._argdefs:
+			while (f._argdefs):
+				args, kwargs = f._argdefs.pop()
 				argparser.add_argument(*args, **kwargs)
 		argparser.set_defaults(func=lambda *_: sys.exit(argparser.print_help()))
 		cargs = argparser.parse_args()
