@@ -60,6 +60,7 @@ _imports = (
 	'zlib',
 	'queue',
 	'regex',
+	'shlex',
 	'base64',
 	'bidict',
 	'codeop',
@@ -78,6 +79,7 @@ _imports = (
 	'typing',
 	'asyncio',
 	'aiohttp',
+	'bashlex',
 	'getpass',
 	'hashlib',
 	'keyword',
@@ -105,6 +107,7 @@ _imports = (
 	'contextlib',
 	'subprocess',
 	'collections',
+	'rlcompleter',
 	'better_exchook',
 	'typing_inspect',
 	'multiprocessing_on_dill as multiprocessing',
@@ -149,14 +152,14 @@ def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
 def isnumber(x): return isinstance(x, (int, float, complex))
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args); return kwargs
 def hex(x, l=2): return '0x%%0%dX' % l % x
+def randstr(n=16): return str().join(random.choices(string.ascii_letters, k=n))
 
 def S(x=None):
 	""" Convert `x' to an instance of corresponding S-type. """
 	ex = None
 	try: return eval('S'+type(x).__name__)(x) if (not isinstance(x, Stype)) else x
 	except NameError: ex = True
-	if (ex): raise \
-		NotImplementedError("S%s" % type(x).__name__)
+	if (ex): raise NotImplementedError("S%s" % type(x).__name__)
 
 class Stype: pass
 
@@ -260,6 +263,8 @@ class Slist(Stype, list):
 	def uniquize(self, key=lambda x: x):
 		was = set()
 		return Slist(was.add(key(i)) or i for i in self if key(i) not in was) # such a dirty hack..
+
+	#def wrap(self, 
 
 	_to_discard = set()
 	def to_discard(self, x):
@@ -368,10 +373,10 @@ class Sstr(Stype, str):
 		r, n = n < 0, abs(n)
 		if (char is None): char = ('\t'*(n//tab_width)+' '*(n % tab_width)) if (not r) else ' '*n
 		else: char *= n
-		return char+('\n'+char).join(self.split('\n')) if (not r) else (char+'\n').join(self.split('\n'))+char
+		return Sstr(char+('\n'+char).join(self.split('\n')) if (not r) else (char+'\n').join(self.split('\n'))+char)
 
 	def just(self, n, char=' ', j=None):
-		if (j is None): j = '<>'[n>0]; n = abs(n)
+		if (j is None): j, n = '<>'[n>0], abs(n)
 		if (j == '.'): r = self.center(n, char)
 		elif (j == '<'): r = self.ljust(n, char)
 		elif (j == '>'): r = self.rjust(n, char)
@@ -381,16 +386,15 @@ class Sstr(Stype, str):
 	def sjust(self, n, *args, **kwargs):
 		return self.indent(n-len(self), *args, **kwargs)
 
-	def wrap(self, w, j='<', char=' ', loff=0):
+	def wrap(self, w, j='<', char=' ', loff=0, sep=' '):
 		if (len(self) <= w-loff): return self
 		r = Sstr()
-		for i in self.split(' '):
+		s = self.split(sep)
+		for i in s[:-1]:
 			r += i
-			r += '\n' if (len(r.split('\n')[-1])+len(i)+1 > w-loff) else ' '
-		return Sstr('\n'.join(Sstr(char*(loff*bool(ii))+i).just(w*(ii == r.count('\n')), j=j, char=char) for ii, i in enumerate(r.rstrip(' ').split('\n'))))
-
-	def rwrap(self, w, char=' '):
-		r = self.split('\n')
+			r += '\n' if (len(r.split('\n')[-1])+len(i)+len(sep) > w-loff) else sep
+		r += s[-1]
+		return Sstr('\n'.join(Sstr(char*(loff*bool(ii))+i) for ii, i in enumerate(r.rstrip(' ').split('\n'))))
 
 	def split(self, *args, **kwargs):
 		return Slist(map(Sstr, str.split(self, *args, **kwargs)))
@@ -607,8 +611,7 @@ def funcdecorator(df):
 		return nf
 
 	#dfsig, ndfsig = inspect.signature(df), inspect.signature(ndf)
-	#if (dfsig != ndfsig): raise \ # TODO kwargs
-	#	ValueError(f"Function decorated with @funcdecorator should have signature '{format_inspect_signature(ndfsig)}' (got: '{format_inspect_signature(dfsig)}')")
+	#if (dfsig != ndfsig): raise ValueError(f"Function decorated with @funcdecorator should have signature '{format_inspect_signature(ndfsig)}' (got: '{format_inspect_signature(dfsig)}')") # TODO kwargs
 
 	ndf.__name__, ndf.__qualname__, ndf.__module__, ndf.__doc__, ndf.__code__ = \
 	 df.__name__,  df.__qualname__,  df.__module__,  df.__doc__, code_with(ndf.__code__, name=df.__code__.co_name)
@@ -631,7 +634,8 @@ def init(*names):
 	@funcdecorator
 	def decorator(f):
 		def decorated(self, *args, **kwargs):
-			for i in names: setattr(self, i, kwargs.pop(i))
+			for i in names:
+				setattr(self, i, kwargs.pop(i))
 			return f(self, *args, **kwargs)
 		return decorated
 	return decorator
@@ -640,9 +644,9 @@ logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
 noesc = re.compile(r'\033\[?[0-?]*[ -/]*[@-~]?')
 logfile = None
 logoutput = sys.stderr
-loglock = [(0,)]
+loglock = queue.LifoQueue()
 _logged_utils_start = None
-def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, width=80, unlock=0, nolog=False): # TODO: finally rewrite me as class pls
+def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, width=80, unlock=False, nolog=False): # TODO: finally rewrite me as class pls
 	""" Log anything. Print (formatted with datetime) to stderr and logfile (if set). Should be compatible with builtins.print().
 	Parameters:
 		[l]: level, must be >= global loglevel to print to stderr rather than only to logfile (or /dev/null).
@@ -666,16 +670,20 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	x = 'plog():\n'*bool(format)+sep.join(map((lambda x: pformat(x, width=width)) if (format) else str, x))
 	clearstr = noesc.sub('', str(x))
 	if (tm is None): tm = time.localtime()
-	if (not unlock and loglock[-1][0]): loglock[-1][1].append(((_l, *_x), dict(sep=sep, end=end, raw=raw, tm=tm, nolog=nolog))); return clearstr
+	if (not unlock and not loglock.empty()): loglock.put(((_l, *_x), dict(sep=sep, end=end, raw=raw, tm=tm, nolog=nolog))); return clearstr
 	try: lc = logcolor[l]
 	except (TypeError, IndexError): lc = ''
 	if (ll is None): ll = f'[\033[1m{lc}LV{l}\033[0;96m]' if (l is not None) else ''
 	logstr = f"\033[K\033[96m{time.strftime('[%x %X] ', tm) if (tm) else ''}\033[0;96m{ll}\033[0;1m{' '*bool(ll)+x if (x != '') else ''}\033[0m{end}" if (not raw) else str(x)+end
+	if (unlock and not loglock.empty()):
+		ul = list()
+		for i in iter_queue(loglock):
+			if (i is None): break
+			ul.append(i)
+		for i in ul[::-1]:
+			log(*i[0], **i[1])
 	if (logfile and not nolog): logfile.write(logstr)
 	if ((l or 0) <= loglevel): logoutput.write(logstr); logoutput.flush()
-	if (unlock and loglock[-1][0] == unlock):
-		_loglock = loglock.pop()
-		for i in _loglock[1]: log(*i[0], **i[1], unlock=_loglock[0])
 	return clearstr
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
 def dlog(*args, **kwargs): parseargs(kwargs, ll='\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m', tm=''); return log(*((args[0] if (args[0] is not None) else repr(args[0]),) if (args) else ()), *args[1:], **kwargs)
@@ -691,7 +699,7 @@ def logstart(x):
 def logstate(state, x=''):
 	global _logged_utils_start
 	if (_logged_utils_start is False): _logged_utils_start = (state, x); return
-	log(state+(': '+str(x))*bool(str(x))+'\033[0m', raw=True, unlock=loglock[-1][0])
+	log(state+(': '+str(x))*bool(str(x))+'\033[0m', raw=True, unlock=True)
 def logstarted(x=''): """ if (__name__ == '__main__'): logstart(); main() """; logstate('\033[94mstarted', x)
 def logimported(x=''): """ if (__name__ != '__main__'): logimported() """; logstate('\033[96mimported', x)
 def logok(x=''): logstate('\033[92mok', x)
@@ -700,9 +708,8 @@ def logwarn(x=''): logstate('\033[93mwarning', x)
 def setlogoutput(f): global logoutput; logoutput = f
 def setlogfile(f): global logfile; logfile = open(f, 'a')
 def setloglevel(l): global loglevel; loglevel = l
-def locklog(): loglock.append((loglock[-1][0]+1, list()))
-def unlocklog():
-	while (loglock[-1][0]): logdumb(unlock=loglock[-1][0])
+def locklog(): loglock.put(None)
+def unlocklog(): logdumb(unlock=True)
 def setutilsnologimport(): global _logged_utils_start; _logged_utils_start = True
 
 _exc_handlers = set()
@@ -780,7 +787,7 @@ class DB:
 	def setfile(self, file):
 		self.file = file
 		if (file is None): return False
-		if ('/' not in file): file = os.path.dirname(os.path.realpath(sys.argv[0]))+'/'+file
+		#if ('/' not in file): file = os.path.dirname(os.path.realpath(sys.argv[0]))+'/'+file
 		try: self.file = open(file, 'r+b')
 		except FileNotFoundError: self.file = open(file, 'w+b')
 		return True
@@ -1213,6 +1220,23 @@ class MetaBuilder(type):
 	def __prepare__(name, bases):
 		return type('', (dict,), {'__getitem__': lambda self, x: MetaBuilder.Var(x[2:]) if (x.startswith('a_') and x[2:]) else dict.__getitem__(self, x)})()
 
+class SlotsMeta(type):
+	def __new__(metacls, name, bases, classdict):
+		annotations = dict()
+		for i in bases:
+			if (hasattr(bases, '__annotations__')): annotations.update(bases.__annotations__)
+		if ('__annotations__' in classdict): annotations.update(classdict['__annotations__'])
+		if (not annotations): return super().__new__(metacls, name, bases, classdict)
+		classdict['__slots__'] = tuple(annotations.keys())
+		cls = super().__new__(metacls, name, bases, classdict)
+		def __init__(self, *args, **kwargs):
+			for k, v in annotations.items():
+				if (not hasattr(self, k)): setattr(self, k, v() if (isinstance(v, type)) else v)
+			super(cls, self).__init__(*args, **kwargs)
+		cls.__init__ = __init__
+		#classdict['__metaclass__'] = metacls  # inheritance?
+		return cls
+
 @funcdecorator
 def instantiate(f):
 	""" Decorator that replaces type returned by decorated function with instance of that type and leaves it as is if it is not a type. """
@@ -1221,7 +1245,8 @@ def instantiate(f):
 		return r() if (isinstance(r, type)) else r
 	return decorated
 
-def singleton(C): return C()
+@dispatch
+def singleton(C: type): return C()
 
 @cachedfunction
 def getsubparser(ap, *args, **kwargs): return ap.add_subparsers(*args, **kwargs)
@@ -1232,7 +1257,7 @@ def apmain(f, nolog=False):
 	def decorated():
 		if (hasattr(f, '_argdefs')):
 			while (f._argdefs):
-				args, kwargs = f._argdefs.pop()
+				args, kwargs = f._argdefs.popleft()
 				argparser.add_argument(*args, **kwargs)
 		argparser.set_defaults(func=lambda *_: sys.exit(argparser.print_help()))
 		cargs = argparser.parse_args()
@@ -1244,9 +1269,8 @@ def apcmd(*args, **kwargs):
 	@funcdecorator
 	def decorator(f):
 		nonlocal args, kwargs
-		if (not hasattr(f, '_argdefs')): raise \
-			ValueError(f"Function decorated with @apcmd should also be decorated with @aparg")
-		subparser = getsubparser(argparser, *args, **kwargs).add_parser(f.__name__, help=f.__doc__)
+		if (not hasattr(f, '_argdefs')): raise ValueError(f"Function decorated with @apcmd should also be decorated with @aparg")
+		subparser = getsubparser(argparser, *args, **kwargs).add_parser(f.__name__.rstrip('_'), help=f.__doc__)
 		for args, kwargs in f._argdefs:
 			subparser.add_argument(*args, **kwargs)
 		subparser.set_defaults(func=f._f)
