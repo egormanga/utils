@@ -172,10 +172,15 @@ class Sdict(Stype, collections.defaultdict):
 	__repr__ = dict.__repr__
 
 	def __getattr__(self, x):
-		return self[x]
+		try: return self[x]
+		except KeyError: pass
+		raise AttributeError(x)
 
 	def __setattr__(self, x, v):
-		self[x] = v
+		try: self[x] = v
+		except KeyError: pass
+		else: return
+		raise AttributeError(x)
 
 	def __and__(self, x):
 		""" Return self with applied .update(x). """
