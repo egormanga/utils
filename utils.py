@@ -515,6 +515,8 @@ def format_inspect_signature(fsig):
 	if (fsig.return_annotation is not inspect._empty): rendered += f" -> {inspect.formatannotation(fsig.return_annotation)}"
 	return rendered
 
+def cast(*types): return lambda x: (t(i) if (not isinstance(i, t)) else i for t, i in zip(types, x))
+
 def cast_call(f, *args, **kwargs):
 	fsig = inspect.signature(f)
 	r = f(*((v.annotation)(args[ii]) if (v.annotation is not inspect._empty and not isinstance(args[ii], v.annotation)) else args[ii] for ii, (k, v) in enumerate(fsig.parameters.items()) if ii < len(args)), **{k: (fsig.parameters[k].annotation)(v) if (k in fsig.parameters and fsig.parameters[k].annotation is not inspect._empty and not isinstance(v, fsig.parameters[k].annotation)) else v for k, v in kwargs.items()})
