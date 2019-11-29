@@ -1068,13 +1068,21 @@ def validate(l, d, nolog=False):
 			return False
 	return True
 
-def decline(n, w, prefix=('',)*3, format=False, show_one=True):
-	q = abs(n) % 10
+def decline(n, w, prefix='', sep=' ', *, format=False, show_one=True):
+	if (isinstance(w, str)): w = (w,)*3
+	elif (len(w) == 1): w *= 3
+	elif (len(w) == 2): w = (*w, w[-1])
+
+	if (isinstance(prefix, str)): prefix = (prefix,)*3
+	elif (len(prefix) == 1): prefix *= 3
+	elif (len(prefix) == 2): prefix = (*prefix, prefix[-1])
+
 	if (5 <= abs(n % 100) <= 20): q = 0
+	else: q = abs(n) % 10
 	if (q == 1): r, p = w[0], prefix[0]
 	elif (2 <= q <= 4): r, p = w[1], prefix[1]
 	else: r, p = w[2], prefix[2]
-	return f"{(p+' ') if (p) else ''}{str(S(n).format(format if (format is not True) else ' ') if (format) else n)+' ' if (n != 1 or show_one) else ''}{r}"
+	return f"{p}{str(S(n).format(' ' if (format is True) else format) if (format) else n)+sep if (n != 1 or show_one) else ''}{r}"
 def testdecline(w): return '\n'.join([decline(i, w) for i in range(10)])
 
 def _timeago(s=-1): # TODO
