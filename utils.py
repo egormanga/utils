@@ -576,6 +576,7 @@ class cachedfunction: # TODO FIXME DEPRECATION (--> @functools.lru_cache; ~100 t
 
 	def clear_cache(self):
 		self._cached.clear()
+class cachedclass(cachedfunction): pass
 
 class cachedproperty: # TODO FIXME DEPRECATION (--> @functools.cached_property; ~100 times faster)
 	class _empty: __slots__ = ()
@@ -674,7 +675,7 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	if (l is None): l = ''
 	if (type(l) is not int): l, x = None, (l, *x)
 	if (x == ()): l, x = 0, (l,)
-	x = 'plog():\n'*bool(format)+sep.join(map((lambda x: pformat(x, width=width)) if (format) else str, x))
+	x = 'plog():\n'*bool(format and not raw)+sep.join(map((lambda x: pformat(x, width=width)) if (format) else str, x))
 	clearstr = noesc.sub('', str(x))
 	if (tm is None): tm = time.localtime()
 	if (not unlock and not loglock.empty()): loglock.put(((_l, *_x), dict(sep=sep, end=end, raw=raw, tm=tm, nolog=nolog))); return clearstr
@@ -1206,6 +1207,22 @@ class staticitemget:
 	def keys(self):
 		return self._fkeys(self)
 
+class AttrView(dict):
+	def __init__(self, obj):
+		self.obj = obj
+
+	def __contains__(self, k):
+		if (not isinstance(k, str)): return False
+		return hasattr(self.obj, k)
+
+	def __getitem__(self, k):
+		if (not isinstance(k, str)): raise KeyError(k)
+		return getattr(self.obj, k)
+
+	def __setitem__(self, k, v):
+		if (not isinstance(k, str)): raise KeyError(k)
+		setattr(self.obj, k, v)
+
 class Builder:
 	def __init__(self, cls, *args, **kwargs):
 		self.cls = cls
@@ -1241,15 +1258,35 @@ class SlotsMeta(type):
 		for i in bases:
 			if (hasattr(bases, '__annotations__')): annotations.update(bases.__annotations__)
 		if ('__annotations__' in classdict): annotations.update(classdict['__annotations__'])
-		if (not annotations): return super().__new__(metacls, name, bases, classdict)
 		classdict['__slots__'] = tuple(annotations.keys())
+		if (not annotations): return super().__new__(metacls, name, bases, classdict)
 		cls = super().__new__(metacls, name, bases, classdict)
+		__init_o__ = cls.__init__
 		def __init__(self, *args, **kwargs):
 			for k, v in annotations.items():
-				if (not hasattr(self, k)): setattr(self, k, v() if (isinstance(v, type)) else v)
-			super(cls, self).__init__(*args, **kwargs)
+				if (not hasattr(self, k)): setattr(self, k, v() if (isinstance(v, (type, function))) else v)
+			__init_o__(self, *args, **kwargs)
 		cls.__init__ = __init__
-		#classdict['__metaclass__'] = metacls  # inheritance?
+		#cls.__metaclass__ = metacls  # inheritance?
+		return cls
+
+class IndexedMeta(type):
+	class Indexer(dict):
+		def __init__(self):
+			self.l = list()
+
+		def __setitem__(self, k, v):
+			if (not k.startswith('__')): self.l.append(v)
+			super().__setitem__(k, v)
+
+	@classmethod
+	def __prepare__(metacls, name, bases):
+		return metacls.Indexer()
+
+	def __new__(metacls, name, bases, classdict):
+		cls = super().__new__(metacls, name, bases, dict(classdict))
+		cls.__list__ = classdict.l
+		#cls.__metaclass__ = metacls  # inheritance?
 		return cls
 
 @funcdecorator
@@ -1262,6 +1299,8 @@ def instantiate(f):
 
 @dispatch
 def singleton(C: type): return C()
+@dispatch
+def singleton(*args, **kwargs): return lambda C: C(*args, **kwargs)
 
 @cachedfunction
 def getsubparser(ap, *args, **kwargs): return ap.add_subparsers(*args, **kwargs)
