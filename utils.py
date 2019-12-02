@@ -845,6 +845,7 @@ class DB:
 			if (not nolog): logex(ex)
 		else:
 			if (not nolog): logok()
+		self.file.truncate()
 		self.file.seek(0)
 db = DB()
 
