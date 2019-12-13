@@ -120,6 +120,17 @@ check(t.f(0), 'This is an integer: 0 !')
 
 assert dispatch_typecheck(('  ', 7), typing.Tuple[str, int])
 
+@dispatch
+def ff(x: int): pass
+
+@dispatch
+def ff(**kwargs): pass
+
+try: print(ff('a'))
+except DispatchError as ex: e = ex
+else: e = None
+checkex(e)
+
 log('dispatch() test ok\n')
 
 # by Sdore, 2019

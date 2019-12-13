@@ -554,6 +554,8 @@ def init_defaults(f):
 	#fsig = inspect.signature(f)
 	#return lambda *args, **kwargs: f(*args, **S(kwargs) & {k: v.annotation() for k, v in fsig.parameters.items() if (k not in kwargs and v.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY) and v.annotation is not inspect._empty)})
 
+def each(it): return tuple(it)
+
 class cachedfunction: # TODO FIXME DEPRECATION (--> @functools.lru_cache; ~100 times faster)
 	def __init__(self, f):
 		self.f = f
@@ -654,7 +656,7 @@ logfile = None
 logoutput = sys.stderr
 loglock = queue.LifoQueue()
 _logged_utils_start = None
-def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, width=80, unlock=False, nolog=False): # TODO: finally rewrite me as class pls
+def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, width=80, unlock=False, flush=True, nolog=False): # TODO: finally rewrite me as class pls
 	""" Log anything. Print (formatted with datetime) to stderr and logfile (if set). Should be compatible with builtins.print().
 	Parameters:
 		[l]: level, must be >= global loglevel to print to stderr rather than only to logfile (or /dev/null).
@@ -690,7 +692,9 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 			ul.append(i)
 		for i in ul[::-1]:
 			log(*i[0], **i[1])
-	if (logfile and not nolog): logfile.write(logstr)
+	if (logfile):
+		if (not nolog): logfile.write(logstr)
+		if (flush): logfile.flush()
 	if ((l or 0) <= loglevel): logoutput.write(logstr); logoutput.flush()
 	return clearstr
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
@@ -718,6 +722,7 @@ def setlogfile(f): global logfile; logfile = open(f, 'a')
 def setloglevel(l): global loglevel; loglevel = l
 def locklog(): loglock.put(None)
 def unlocklog(): logdumb(unlock=True)
+def logflush(): logdumb(flush=True)
 def setutilsnologimport(): global _logged_utils_start; _logged_utils_start = True
 
 _exc_handlers = set()
@@ -1306,10 +1311,9 @@ def singleton(*args, **kwargs): return lambda C: C(*args, **kwargs)
 @cachedfunction
 def getsubparser(ap, *args, **kwargs): return ap.add_subparsers(*args, **kwargs)
 
-#@dispatch
 @funcdecorator
-def apmain(f, nolog=False):
-	def decorated():
+def apmain(f):
+	def decorated(*, nolog=False):
 		if (hasattr(f, '_argdefs')):
 			while (f._argdefs):
 				args, kwargs = f._argdefs.popleft()
@@ -1500,6 +1504,7 @@ def exit(c=None, code=None, raw=False, nolog=False):
 	unlocklog()
 	db.save(nolog=True)
 	if (not nolog): log(f'{c}' if (raw) else f'Exit: {c}' if (c and type(c) == str or hasattr(c, 'args') and c.args) else 'Exit.')
+	if (logfile): logfile.flush()
 	try: sys.exit(int(bool(c)) if (code is not None) else code)
 	finally:
 		if (not nolog): log(raw=True)
