@@ -27,7 +27,8 @@ class ModuleProxy(module):
 
 	def __getattribute__(self, x):
 		module = __import__(object.__getattribute__(self, '__name__'))
-		inspect.stack()[1][0].f_globals[object.__getattribute__(self, '_as')] = module
+		try: inspect.stack()[1][0].f_globals[object.__getattribute__(self, '_as')] = module
+		except IndexError: pass
 		return getattr(module, x)
 
 def Simport(x, as_=None):
@@ -88,6 +89,7 @@ _imports = (
 	'os.path',
 	'termios',
 	'zipfile',
+	'aiofiles',
 	'argparse',
 	'attrdict',
 	'builtins',
@@ -101,6 +103,7 @@ _imports = (
 	'functools',
 	'importlib',
 	'itertools',
+	'mimetypes',
 	'pyparsing',
 	'threading',
 	'traceback',
@@ -152,7 +155,7 @@ def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
 def isnumber(x): return isinstance(x, (int, float, complex))
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args); return kwargs
 def hex(x, l=2): return '0x%%0%dX' % l % x
-def randstr(n=16): return str().join(random.choices(string.ascii_letters, k=n))
+def randstr(n=16, *, caseless=False, seed=None): return str().join((random.Random(seed) if (seed is not None) else random).choices(string.ascii_lowercase if (caseless) else string.ascii_letters, k=n))
 
 def S(x=None):
 	""" Convert `x' to an instance of corresponding S-type. """
@@ -609,6 +612,13 @@ def subclassdict(cls: type):
 @dispatch
 def subclassdict(obj): return subclassdict(type(obj))
 
+@dispatch
+def allsubclassdict(cls: type):
+	""" Get name-class mapping for all subclasses of class `cls' (see `allsubclasses'). """
+	return {i.__name__: i for i in allsubclasses(cls)}
+@dispatch
+def allsubclassdict(obj): return allsubclassdict(type(obj))
+
 def funcdecorator(df):
 	def ndf(f, *args, **kwargs):
 		if (not isinstance(f, function)): return lambda nf: ndf(nf, f, *args, **kwargs)
@@ -718,7 +728,7 @@ def logok(x=''): logstate('\033[92mok', x)
 def logex(x=''): logstate('\033[91merror', unraise(x))
 def logwarn(x=''): logstate('\033[93mwarning', x)
 def setlogoutput(f): global logoutput; logoutput = f
-def setlogfile(f): global logfile; logfile = open(f, 'a')
+def setlogfile(f): global logfile; logfile = open(f, 'a') if (isinstance(f, str)) else f
 def setloglevel(l): global loglevel; loglevel = l
 def locklog(): loglock.put(None)
 def unlocklog(): logdumb(unlock=True)
@@ -1168,6 +1178,24 @@ class classproperty:
 
 	def __get__(self, obj, cls):
 		return self.f(cls)
+
+class attrget:
+	__slots__ = ('f',)
+
+	class getter:
+		__slots__ = ('obj', 'f')
+
+		def __init__(self, obj, f):
+			self.obj, self.f = obj, f
+
+		def __getattr__(self, x):
+			return self.f(self.obj, x)
+
+	def __init__(self, f):
+		self.f = f
+
+	def __get__(self, obj, cls):
+		return self.getter(obj, self.f)
 
 class itemget:
 	__slots__ = ('f',)
