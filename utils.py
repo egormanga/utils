@@ -92,6 +92,7 @@ _imports = (
 	'aiofiles',
 	'argparse',
 	'attrdict',
+	'bintools',
 	'builtins',
 	'datetime',
 	'operator',
@@ -230,11 +231,11 @@ class Sdict(Stype, collections.defaultdict):
 		self._to_discard.clear()
 Sdefaultdict = Sdict
 
-class Slist(Stype, list):
+class Slist(Stype, list): # TODO: fix everywhere: type(x) == y --> isinstance(x, y)
 	def __matmul__(self, item):
 		if (type(item) == dict): return Slist(i for i in self if all(i.get(j) in (item[j]) for j in item))
 		r = Slist(Slist((i.get(j) if (hasattr(i, 'get')) else i[j]) for j in item) for i in self)
-		return r.flatten() if (len(item) == 1 and not isiterable(item[0]) or type(item[0]) == str) else r
+		return r.flatten() if (len(item) == 1 and not isiterable(item[0]) or type(item[0]) == str) else r # TODO FIXME isiterablenostr?
 
 	def __getitem__(self, x):
 		if (not isiterable(x)): return list.__getitem__(self, x)
@@ -516,19 +517,27 @@ def format_inspect_signature(fsig):
 		elif (posonlysep): result.append('/'); posonlysep = False
 		if (p.kind == inspect.Parameter.VAR_POSITIONAL): kwonlysep = False
 		elif (p.kind == inspect.Parameter.KEYWORD_ONLY and kwonlysep): result.append('*'); kwonlysep = False
-		result.append(f"{'*' if (p.kind == inspect.Parameter.VAR_POSITIONAL) else '**' if (p.kind == inspect.Parameter.VAR_KEYWORD) else ''}{p.name}{f': {inspect.formatannotation(p.annotation)}' if (p.annotation is not inspect._empty) else ''}{f' = {p.default}' if (p.annotation is not inspect._empty and p.default is not inspect._empty) else f'={p.default}' if (p.default is not inspect._empty) else ''}")
+		result.append(f"{'*' if (p.kind == inspect.Parameter.VAR_POSITIONAL) else '**' if (p.kind == inspect.Parameter.VAR_KEYWORD) else ''}{p.name}{f': {format_inspect_annotation(p.annotation)}' if (p.annotation is not inspect._empty) else ''}{f' = {p.default}' if (p.annotation is not inspect._empty and p.default is not inspect._empty) else f'={p.default}' if (p.default is not inspect._empty) else ''}")
 
 	if (posonlysep): result.append('/')
 	rendered = ', '.join(result).join('()')
 	if (fsig.return_annotation is not inspect._empty): rendered += f" -> {inspect.formatannotation(fsig.return_annotation)}"
 	return rendered
 
+def format_inspect_annotation(annotation):
+	return '<lambda>' if (isinstance(annotation, function)) else inspect.formatannotation(annotation)
+
 def cast(*types): return lambda x: (t(i) if (not isinstance(i, t)) else i for t, i in zip(types, x))
 
 def cast_call(f, *args, **kwargs):
 	fsig = inspect.signature(f)
-	r = f(*((v.annotation)(args[ii]) if (v.annotation is not inspect._empty and not isinstance(args[ii], v.annotation)) else args[ii] for ii, (k, v) in enumerate(fsig.parameters.items()) if ii < len(args)), **{k: (fsig.parameters[k].annotation)(v) if (k in fsig.parameters and fsig.parameters[k].annotation is not inspect._empty and not isinstance(v, fsig.parameters[k].annotation)) else v for k, v in kwargs.items()})
+	try:
+		args = [(v.annotation)(args[ii]) if (v.annotation is not inspect._empty and not isinstance(args[ii], v.annotation)) else args[ii] for ii, (k, v) in enumerate(fsig.parameters.items()) if ii < len(args)]
+		kwargs = {k: (fsig.parameters[k].annotation)(v) if (k in fsig.parameters and fsig.parameters[k].annotation is not inspect._empty and not isinstance(v, fsig.parameters[k].annotation)) else v for k, v in kwargs.items()}
+	except Exception as ex: raise CastError() from ex
+	r = f(*args, **kwargs)
 	return (fsig.return_annotation)(r) if (fsig.return_annotation is not inspect._empty) else r
+class CastError(TypeError): pass
 
 def autocast(f):
 	""" Beware! leads to undefined behavior when used with @dispatch. """
@@ -750,8 +759,7 @@ def exception(ex: BaseException, once=False, raw=False, nolog=False):
 	if (once):
 		if (repr(ex) in _logged_exceptions): return
 		_logged_exceptions.add(repr(ex))
-	exc = repr(ex).partition('(')[0]
-	e = log(('\033[91mCaught ' if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+f"{exc}{(' on line '+'→'.join(map(lambda x: str(x[1]), traceback.walk_tb(ex.__traceback__)))).rstrip(' on line')}\033[0m{(': '+str(ex))*bool(str(ex))}", raw=raw)
+	e = log(('\033[91mCaught ' if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+f"{ex.__class__.__qualname__}{(' on line '+'→'.join(map(lambda x: str(x[1]), traceback.walk_tb(ex.__traceback__)))).rstrip(' on line')}\033[0m{(': '+str(ex))*bool(str(ex))}", raw=raw)
 	if (nolog): return
 	for i in _exc_handlers:
 		try: i(e, ex)
@@ -1198,7 +1206,7 @@ class attrget:
 		return self.getter(obj, self.f)
 
 class itemget:
-	__slots__ = ('f',)
+	__slots__ = ('f', '__call__', '_bool')
 
 	class getter:
 		__slots__ = ('obj', 'f')
@@ -1209,8 +1217,19 @@ class itemget:
 		def __getitem__(self, x):
 			return self.f(self.obj, *(x if (isinstance(x, tuple)) else (x,)))
 
+	@dispatch
+	def __init__(self, *, bool: function):
+		self._bool = bool
+		self.__call__ = lambda f: each[setattr(self, 'f', f), delattr(self, '__call__')]
+
+	@dispatch
 	def __init__(self, f):
 		self.f = f
+
+	def __bool__(self):
+		try: f = self._bool
+		except AttributeError: return super().__bool__()
+		else: return f(self.obj)
 
 	def __get__(self, obj, cls):
 		return self.getter(obj, self.f)
@@ -1339,6 +1358,9 @@ def singleton(*args, **kwargs): return lambda C: C(*args, **kwargs)
 @cachedfunction
 def getsubparser(ap, *args, **kwargs): return ap.add_subparsers(*args, **kwargs)
 
+@staticitemget
+def each(*x): pass
+
 @funcdecorator
 def apmain(f):
 	def decorated(*, nolog=False):
@@ -1454,8 +1476,11 @@ class listmap:
 			yield (k, self[k])
 
 class indexset:
-	def __init__(self):
-		self._list = list()
+	def __init__(self, list_=None):
+		self._list = list_ or []
+
+	def __repr__(self):
+		return f"indexset({repr(dict(enumerate(self._list)))})"
 
 	def __getitem__(self, x):
 		try: return self._list.index(x)
@@ -1465,6 +1490,9 @@ class indexset:
 
 	def __delitem__(self, x):
 		self._list.remove(x)
+
+	def copy(self):
+		return indexset(self._list.copy())
 
 	@itemget
 	def values(self, x):
