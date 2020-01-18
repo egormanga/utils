@@ -65,6 +65,7 @@ _imports = (
 	'base64',
 	'bidict',
 	'codeop',
+	'ctypes',
 	'getkey',
 	'locale',
 	'parser',
@@ -233,7 +234,7 @@ Sdefaultdict = Sdict
 
 class Slist(Stype, list): # TODO: fix everywhere: type(x) == y --> isinstance(x, y)
 	def __matmul__(self, item):
-		if (type(item) == dict): return Slist(i for i in self if all(i.get(j) in (item[j]) for j in item))
+		if (type(item) == dict): return Slist(i for i in self if all(v(i.get(k)) if (callable(v)) else i.get(k) in v for k, v in item.items()))
 		r = Slist(Slist((i.get(j) if (hasattr(i, 'get')) else i[j]) for j in item) for i in self)
 		return r.flatten() if (len(item) == 1 and not isiterable(item[0]) or type(item[0]) == str) else r # TODO FIXME isiterablenostr?
 
@@ -255,7 +256,7 @@ class Slist(Stype, list): # TODO: fix everywhere: type(x) == y --> isinstance(x,
 		l = len(self)
 		return l-self.index(x, 0, l-start)-1
 
-	def group(self, n):
+	def group(self, n): # TODO FIXME: (*(...),) -> tuple() everywhere
 		return Slist((*(j for j in i if (j is not None)),) for i in itertools.zip_longest(*[iter(self)]*n))
 
 	def flatten(self):
@@ -289,7 +290,7 @@ class Stuple(Slist): pass # TODO
 
 class Sint(Stype, int):
 	def __len__(self):
-		return Sint(math.log10(abs(self) or 10))
+		return Sint(math.log10(abs(self) or 1)+1)
 
 	def constrain(self, lb, ub):
 		return Sint(constrain(self, lb, ub))
@@ -396,14 +397,18 @@ class Sstr(Stype, str):
 		return self.indent(n-len(self), *args, **kwargs)
 
 	def wrap(self, w, j='<', char=' ', loff=0, sep=' '):
-		if (len(self) <= w-loff): return self
-		r = Sstr()
-		s = self.split(sep)
-		for i in s[:-1]:
+		w -= loff
+		if (len(self) <= w): return self
+		r, *s = self.split(sep)
+		cw = w-len(r)
+		for i in s:
+			if (cw >= len(sep)+len(i)): r += sep; cw -= len(sep)
+			else: r += '\n'; cw = w
 			r += i
-			r += '\n' if (len(r.split('\n')[-1])+len(i)+len(sep) > w-loff) else sep
-		r += s[-1]
-		return Sstr('\n'.join(Sstr(char*(loff*bool(ii))+i) for ii, i in enumerate(r.rstrip(' ').split('\n'))))
+			cw -= len(i)
+			#i = i.replace('\r', '\n') # TODO?
+			if ('\n' in i): cw = w-len(i[i.rindex('\n'):])
+		return Sstr('\n'.join(char*(loff*bool(ii))+i for ii, i in enumerate(r.rstrip(' ').split('\n'))))
 
 	def split(self, *args, **kwargs):
 		return Slist(map(Sstr, str.split(self, *args, **kwargs)))
@@ -1031,7 +1036,7 @@ def testprogress(n=1000, sleep=0.002):
 
 class NodesTree:
 	chars = '┌├└─│╾╼'
-	colorchars = (*('\033[2m'+i+'\033[22m' for i in chars),)
+	colorchars = tuple(f"\033[2m{i}\033[22m" for i in chars)
 
 	def __init__(self, x):
 		self.tree = x
@@ -1041,7 +1046,8 @@ class NodesTree:
 		out.write(self.format(**fmtkwargs)+'\n')
 
 	def format(self, **fmtkwargs):
-		return '\n'.join(self.format_node(self.tree, root=True, **fmtkwargs))
+		parseargs(fmtkwargs, root=True)
+		return '\n'.join(self.format_node(self.tree, **fmtkwargs))
 
 	@classmethod
 	def format_node(cls, node, indent=2, color=False, usenodechars=False, root=False):
@@ -1260,6 +1266,18 @@ class staticitemget:
 	def keys(self):
 		return self._fkeys(self)
 
+class staticattrget:
+	__slots__ = ('f',)
+
+	def __init__(self, f):
+		self.f = f
+
+	def __getattr__(self, x):
+		return self.f(x)
+
+	def __call__(self, *args, **kwargs):
+		return self.f(*args, **kwargs)
+
 class AttrView(dict):
 	def __init__(self, obj):
 		self.obj = obj
@@ -1378,12 +1396,13 @@ def apcmd(*args, **kwargs):
 	@funcdecorator
 	def decorator(f):
 		nonlocal args, kwargs
-		if (not hasattr(f, '_argdefs')): raise ValueError(f"Function decorated with @apcmd should also be decorated with @aparg")
 		subparser = getsubparser(argparser, *args, **kwargs).add_parser(f.__name__.rstrip('_'), help=f.__doc__)
-		for args, kwargs in f._argdefs:
-			subparser.add_argument(*args, **kwargs)
-		subparser.set_defaults(func=f._f)
-		return f._f
+		if (hasattr(f, '_argdefs')):
+			for args, kwargs in f._argdefs:
+				subparser.add_argument(*args, **kwargs)
+			f = f._f
+		subparser.set_defaults(func=f)
+		return f
 	return decorator
 
 def aparg(*args, **kwargs):
@@ -1520,7 +1539,7 @@ def preeval(f):
         r = f()
         return lambda: r
 
-def printf(format, *args, file=sys.stdout, flush=False): print(format % args, end='', file=file, flush=flush)
+#def printf(format, *args, file=sys.stdout, flush=False): print(format % args, end='', file=file, flush=flush)  # breaks convenience of 'pri-' tab-completion.
 class _CStream: # because I can.
 	@dispatch
 	def __init__(self, fd):
