@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 # Utils lib
+#type: ignore
 
 """ Sdore's Utils
 
@@ -52,6 +53,7 @@ _imports = (
 	'copy',
 	'dill',
 	'glob',
+	'gzip',
 	'html',
 	'json',
 	'math',
@@ -59,9 +61,12 @@ _imports = (
 	'time',
 	'uuid',
 	'zlib',
+	'errno',
 	'queue',
 	'regex',
 	'shlex',
+	'types',
+	'atexit',
 	'base64',
 	'bidict',
 	'codeop',
@@ -90,6 +95,7 @@ _imports = (
 	'os.path',
 	'termios',
 	'zipfile',
+	'aiocache',
 	'aiofiles',
 	'argparse',
 	'attrdict',
@@ -104,8 +110,10 @@ _imports = (
 	'fractions',
 	'functools',
 	'importlib',
+	'ipaddress',
 	'itertools',
 	'mimetypes',
+	'netifaces',
 	'pyparsing',
 	'threading',
 	'traceback',
@@ -113,6 +121,7 @@ _imports = (
 	'subprocess',
 	'collections',
 	'rlcompleter',
+	'aioprocessing',
 	'better_exchook',
 	'typing_inspect',
 	'multiprocessing_on_dill as multiprocessing',
@@ -144,9 +153,11 @@ cargs = argparser.parse_known_args()[0]
 argparser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
 loglevel = (cargs.v or 0)-(cargs.q or 0)
 
-function = type(lambda: None)
-generator = type(_ for _ in ())
-CodeType = type(compile('', '', 'exec'))
+# TODO: types.*
+function = types.FunctionType
+method = types.MethodType
+generator = types.GeneratorType
+CodeType = types.CodeType
 NoneType = type(None)
 inf = float('inf')
 nan = float('nan')
@@ -158,11 +169,17 @@ def isnumber(x): return isinstance(x, (int, float, complex))
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args); return kwargs
 def hex(x, l=2): return '0x%%0%dX' % l % x
 def randstr(n=16, *, caseless=False, seed=None): return str().join((random.Random(seed) if (seed is not None) else random).choices(string.ascii_lowercase if (caseless) else string.ascii_letters, k=n))
+def safeexec():
+	try:
+		sys.stderr.write('\033[2m>>> ')
+		sys.stderr.flush()
+		return exec(sys.stdin.readline())
+	finally: sys.stderr.write('\033[0m')
 
 def S(x=None):
 	""" Convert `x' to an instance of corresponding S-type. """
 	ex = None
-	try: return eval('S'+type(x).__name__)(x) if (not isinstance(x, Stype)) else x
+	try: return Stuple(x) if (isinstance(x, generator)) else eval('S'+type(x).__name__)(x) if (not isinstance(x, Stype)) else x
 	except NameError: ex = True
 	if (ex): raise NotImplementedError("S%s" % type(x).__name__)
 
@@ -252,9 +269,8 @@ class Slist(Stype, list): # TODO: fix everywhere: type(x) == y --> isinstance(x,
 	def copy(self):
 		return Slist(self)
 
-	def rindex(self, x, start=0): # TODO FIXME
-		l = len(self)
-		return l-self.index(x, 0, l-start)-1
+	def rindex(self, x, start=0): # TODO end
+		return len(self)-self[:(start or None) and start-1:-1].index(x)-1
 
 	def group(self, n): # TODO FIXME: (*(...),) -> tuple() everywhere
 		return Slist((*(j for j in i if (j is not None)),) for i in itertools.zip_longest(*[iter(self)]*n))
@@ -270,9 +286,9 @@ class Slist(Stype, list): # TODO: fix everywhere: type(x) == y --> isinstance(x,
 	def filter(self, t):
 		return Slist(i for i in self if type(i) == t)
 
-	def uniquize(self, key=lambda x: x):
+	def uniquize(self, key=None):
 		was = set()
-		return Slist(was.add(key(i)) or i for i in self if key(i) not in was) # such a dirty hack..
+		return Slist(was.add(key(i) if (key is not None) else i) or i for i in self if (key(i) if (key is not None) else i) not in was)  # such a dirty hack..
 
 	#def wrap(self, 
 
@@ -377,13 +393,16 @@ class Sstr(Stype, str):
 	def bool(self, minus_one=True):
 		return bool(self) and self.casefold() not in ('0', 'false', 'no', 'нет', '-1'*(not minus_one))
 
-	def indent(self, n=None, char=None, tab_width=8):
+	def indent(self, n=None, char=None, tab_width=8, foldempty=True):
 		if (not self): return self
 		if (n is None): n = tab_width
 		r, n = n < 0, abs(n)
 		if (char is None): char = ('\t'*(n//tab_width)+' '*(n % tab_width)) if (not r) else ' '*n
 		else: char *= n
-		return Sstr(char+('\n'+char).join(self.split('\n')) if (not r) else (char+'\n').join(self.split('\n'))+char)
+		if (not r): res = char+('\n'+char).join(self.split('\n'))
+		else:       res = (char+'\n').join(self.split('\n'))+char
+		if (foldempty): res = re.sub(r'^\s+?$', '', res, flags=re.M)
+		return Sstr(res)
 
 	def just(self, n, char=' ', j=None):
 		if (j is None): j, n = '<>'[n>0], abs(n)
@@ -439,6 +458,27 @@ def code_with(code, **kwargs):
 	if (sys.version_info >= (3, 8)): return code.replace(**{'co_'+k: v for k, v in kwargs.items()})
 	return CodeType(*(kwargs.get(i, getattr(code, 'co_'+i)) for i in ('argcount', 'kwonlyargcount', 'nlocals', 'stacksize', 'flags', 'code', 'consts', 'names', 'varnames', 'filename', 'name', 'firstlineno', 'lnotab', 'freevars', 'cellvars')))
 # TODO: func_with()
+
+def funcdecorator(df):
+	def ndf(f, *args, **kwargs):
+		if (not isinstance(f, function)): return lambda nf: ndf(nf, f, *args, **kwargs)
+		nf = df(f)
+		nf.__name__, nf.__qualname__, nf.__module__, nf.__doc__, nf.__annotations__, nf.__signature__ = \
+		 f.__name__,  f.__qualname__,  f.__module__,  f.__doc__, f.__annotations__, inspect.signature(f)
+		nf.__code__ = code_with(nf.__code__, name=f"<decorated '{f.__code__.co_name}'>" if (not f.__code__.co_name.startswith('<decorated ')) else f.__code__.co_name)
+		for i in filter(lambda x: not x.startswith('__'), dir(f)):
+			setattr(nf, i, getattr(f, i))
+		return nf
+
+	#dfsig, ndfsig = inspect.signature(df), inspect.signature(ndf)
+	#if (dfsig != ndfsig): raise ValueError(f"Function decorated with @funcdecorator should have signature '{format_inspect_signature(ndfsig)}' (got: '{format_inspect_signature(dfsig)}')") # TODO kwargs
+
+	ndf.__name__, ndf.__qualname__, ndf.__module__, ndf.__doc__, ndf.__code__ = \
+	 df.__name__,  df.__qualname__,  df.__module__,  df.__doc__, code_with(ndf.__code__, name=df.__code__.co_name)
+	for i in filter(lambda x: not x.startswith('__'), dir(df)):
+		setattr(nff, i, getattr(df, i))
+
+	return ndf
 
 class DispatchFillValue: pass
 class DispatchError(TypeError): pass
@@ -544,6 +584,7 @@ def cast_call(f, *args, **kwargs):
 	return (fsig.return_annotation)(r) if (fsig.return_annotation is not inspect._empty) else r
 class CastError(TypeError): pass
 
+@funcdecorator
 def autocast(f):
 	""" Beware! leads to undefined behavior when used with @dispatch. """
 	r = lambda *args, **kwargs: cast_call(f, *args, **kwargs)
@@ -573,6 +614,15 @@ def init_defaults(f):
 
 def each(it): return tuple(it)
 
+@dispatch
+def tohashable(d: typing.Dict): return tuple(sorted((k, tohashable(v)) for k, v in d.items()))
+@dispatch
+def tohashable(s: str): return s
+@dispatch
+def tohashable(l: typing.Iterable): return tuple(map(tohashable, l))
+@dispatch
+def tohashable(x: typing.Hashable): return x
+
 class cachedfunction: # TODO FIXME DEPRECATION (--> @functools.lru_cache; ~100 times faster)
 	def __init__(self, f):
 		self.f = f
@@ -597,20 +647,22 @@ class cachedfunction: # TODO FIXME DEPRECATION (--> @functools.lru_cache; ~100 t
 		self._cached.clear()
 class cachedclass(cachedfunction): pass
 
-class cachedproperty: # TODO FIXME DEPRECATION (--> @functools.cached_property; ~100 times faster)
-	class _empty: __slots__ = ()
-	_empty = _empty()
+try: cachedproperty = functools.cached_property # TODO
+except AttributeError:
+	class cachedproperty:
+		class _empty: __slots__ = ()
+		_empty = _empty()
 
-	def __init__(self, f):
-		self.f = f
-		self._cached = self._empty
+		def __init__(self, f):
+			self.f = f
+			self._cached = self._empty
 
-	def __get__(self, obj, objcls):
-		if (self._cached is self._empty): self._cached = self.f(obj)
-		return self._cached
+		def __get__(self, obj, objcls):
+			if (self._cached is self._empty): self._cached = self.f(obj)
+			return self._cached
 
-	def clear_cache(self):
-		self._cached.clear()
+		def clear_cache(self):
+			self._cached.clear()
 
 @dispatch
 def allsubclasses(cls: type):
@@ -633,26 +685,12 @@ def allsubclassdict(cls: type):
 @dispatch
 def allsubclassdict(obj): return allsubclassdict(type(obj))
 
-def funcdecorator(df):
-	def ndf(f, *args, **kwargs):
-		if (not isinstance(f, function)): return lambda nf: ndf(nf, f, *args, **kwargs)
-		nf = df(f)
-		nf.__name__, nf.__qualname__, nf.__module__, nf.__doc__, nf.__signature__ = \
-		 f.__name__,  f.__qualname__,  f.__module__,  f.__doc__, inspect.signature(f)
-		nf.__code__ = code_with(nf.__code__, name=f"<decorated '{f.__code__.co_name}'>" if (not f.__code__.co_name.startswith('<decorated ')) else f.__code__.co_name)
-		for i in filter(lambda x: not x.startswith('__'), dir(f)):
-			setattr(nf, i, getattr(f, i))
-		return nf
-
-	#dfsig, ndfsig = inspect.signature(df), inspect.signature(ndf)
-	#if (dfsig != ndfsig): raise ValueError(f"Function decorated with @funcdecorator should have signature '{format_inspect_signature(ndfsig)}' (got: '{format_inspect_signature(dfsig)}')") # TODO kwargs
-
-	ndf.__name__, ndf.__qualname__, ndf.__module__, ndf.__doc__, ndf.__code__ = \
-	 df.__name__,  df.__qualname__,  df.__module__,  df.__doc__, code_with(ndf.__code__, name=df.__code__.co_name)
-	for i in filter(lambda x: not x.startswith('__'), dir(df)):
-		setattr(nff, i, getattr(df, i))
-
-	return ndf
+@dispatch
+def allannotations(cls: type):
+	""" Get annotations dict for all the MRO of class `cls' in right («super-to-sub») order. """
+	return {k: v for i in cls.mro()[::-1] if hasattr(i, '__annotations__') for k, v in i.__annotations__.items()}
+@dispatch
+def allannotations(obj): return allannotations(type(obj))
 
 def spreadargs(f, okwargs, *args, **akwargs):
 	fsig = inspect.signature(f)
@@ -722,7 +760,7 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	if ((l or 0) <= loglevel): logoutput.write(logstr); logoutput.flush()
 	return clearstr
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
-def dlog(*args, **kwargs): parseargs(kwargs, ll='\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m', tm=''); return log(*((args[0] if (args[0] is not None) else repr(args[0]),) if (args) else ()), *args[1:], **kwargs)
+def dlog(*args, **kwargs): parseargs(kwargs, ll='\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m', tm=''); return log(*map(str, args), **kwargs)
 def dplog(*args, **kwargs): parseargs(kwargs, format=True, sep='\n'); return dlog(*args, **kwargs)
 def rlog(*args, **kwargs): parseargs(kwargs, raw=True); return log(*args, **kwargs)
 def logdumb(**kwargs): return log(raw=True, end='', **kwargs)
@@ -797,8 +835,6 @@ def suppress(*ex: BaseException):
 	raise TODO
 
 def assert_(x): assert x; return True
-
-def noop(*_, **__): pass
 
 class _clear:
 	""" Clear the terminal. """
@@ -1220,6 +1256,11 @@ class itemget:
 		def __init__(self, obj, f):
 			self.obj, self.f = obj, f
 
+		def __contains__(self, x):
+			try: self[x]
+			except KeyError: return False
+			else: return True
+
 		def __getitem__(self, x):
 			return self.f(self.obj, *(x if (isinstance(x, tuple)) else (x,)))
 
@@ -1239,6 +1280,15 @@ class itemget:
 
 	def __get__(self, obj, cls):
 		return self.getter(obj, self.f)
+
+class classitemget(itemget):
+	__slots__ = ('f',)
+
+	def __init__(self, f):
+		self.f = f
+
+	def __get__(self, obj, cls):
+		return self.getter(cls, self.f)
 
 class staticitemget:
 	__slots__ = ('f', '_fkeys')
@@ -1278,9 +1328,12 @@ class staticattrget:
 	def __call__(self, *args, **kwargs):
 		return self.f(*args, **kwargs)
 
-class AttrView(dict):
+class AttrView:
 	def __init__(self, obj):
 		self.obj = obj
+
+	def __repr__(self):
+		return f"<AttrView of {self.obj}>"
 
 	def __contains__(self, k):
 		if (not isinstance(k, str)): return False
@@ -1293,6 +1346,34 @@ class AttrView(dict):
 	def __setitem__(self, k, v):
 		if (not isinstance(k, str)): raise KeyError(k)
 		setattr(self.obj, k, v)
+
+	def keys(self):
+		return dir(self.obj)
+
+class AttrProxy:
+	def __init__(self, *objects):
+		self.objects = objects
+
+	def __repr__(self):
+		return f"<AttrProxy of {S(', ').join(self.objects)}>"
+
+	def __getitem__(self, x):
+		for i in self.objects:
+			try: return getattr(i, x)
+			except AttributeError: continue
+		else: raise KeyError(x)
+
+	def __dir__(self):
+		return [k for i in self.objects for k in dir(i)]
+
+	def __iter__(self):
+		return iter(self.keys())
+
+	def __dict__(self):
+		return {k: getattr(i, k) for i in self.objects for k in dir(i)}
+
+	def keys(self):
+		return self.__dir__()
 
 class Builder:
 	def __init__(self, cls, *args, **kwargs):
@@ -1325,21 +1406,21 @@ class MetaBuilder(type):
 
 class SlotsMeta(type):
 	def __new__(metacls, name, bases, classdict):
-		annotations = dict()
-		for i in bases:
-			if (hasattr(bases, '__annotations__')): annotations.update(bases.__annotations__)
-		if ('__annotations__' in classdict): annotations.update(classdict['__annotations__'])
+		annotations = classdict.get('__annotations__', {})
 		classdict['__slots__'] = tuple(annotations.keys())
-		if (not annotations): return super().__new__(metacls, name, bases, classdict)
 		cls = super().__new__(metacls, name, bases, classdict)
+		if (not annotations): return cls
 		__init_o__ = cls.__init__
 		def __init__(self, *args, **kwargs):
 			for k, v in annotations.items():
-				if (not hasattr(self, k)): setattr(self, k, v() if (isinstance(v, (type, function))) else v)
+				try: object.__getattribute__(self, k)
+				except AttributeError: object.__setattr__(self, k, v() if (isinstance(v, (type, function, method))) else v)
 			__init_o__(self, *args, **kwargs)
 		cls.__init__ = __init__
 		#cls.__metaclass__ = metacls  # inheritance?
 		return cls
+
+class ABCSlotsMeta(SlotsMeta, abc.ABCMeta): pass
 
 class IndexedMeta(type):
 	class Indexer(dict):
@@ -1369,9 +1450,20 @@ def instantiate(f):
 	return decorated
 
 @dispatch
-def singleton(C: type): return C()
+def singleton(C: type): C.__new__ = cachedfunction(C.__new__); return C()
 @dispatch
 def singleton(*args, **kwargs): return lambda C: C(*args, **kwargs)
+
+def noop(*_, **__): pass
+@singleton
+class noopf:
+	__call__ = noop
+
+	def __repr__(self):
+		return 'noopf'
+
+	def __bool__(self):
+		return False
 
 @cachedfunction
 def getsubparser(ap, *args, **kwargs): return ap.add_subparsers(*args, **kwargs)
@@ -1433,15 +1525,6 @@ class hashabledict(dict):
 	def __hash__(self):
 		return hash(tuple(self.items()))
 
-@dispatch
-def tohashable(d: typing.Dict): return tuple(sorted((k, tohashable(v)) for k, v in d.items()))
-@dispatch
-def tohashable(s: str): return s
-@dispatch
-def tohashable(l: typing.Iterable): return tuple(map(tohashable, l))
-@dispatch
-def tohashable(x: typing.Hashable): return x
-
 class paramset(set):
 	def __init__(self, x=()):
 		super().__init__(map(str, x))
@@ -1454,12 +1537,21 @@ class paramset(set):
 	__getitem__ = __getattr__
 
 	def __setattr__(self, x, y):
-		if (y): self.add(str(x))
+		if (y): self.add(x)
 	__setitem__ = __setattr__
 
 	def __delattr__(self, x):
-		self.discard(str(x))
+		self.discard(x)
 	__delitem__ = __delattr__
+
+	def add(self, x):
+		super().add(str(x))
+
+	def discard(self, x):
+		super().discard(str(x))
+
+	def update(self, x):
+		super().update(map(str, x))
 
 class listmap:
 	def __init__(self):
@@ -1495,6 +1587,8 @@ class listmap:
 			yield (k, self[k])
 
 class indexset:
+	class _empty: pass
+
 	def __init__(self, list_=None):
 		self._list = list_ or []
 
@@ -1508,14 +1602,39 @@ class indexset:
 			return len(self._list)-1
 
 	def __delitem__(self, x):
-		self._list.remove(x)
+		self._list[x] = self._empty
+
+	def __iter__(self):
+		return iter(self._list)
 
 	def copy(self):
 		return indexset(self._list.copy())
 
 	@itemget
 	def values(self, x):
-		return self._list[x]
+		try:
+			if (self._list[x] is self._empty): raise KeyError(x)
+			return self._list[x]
+		except IndexError: pass
+		raise KeyError(x)
+
+class hashset(metaclass=SlotsMeta):
+	hashes: dict
+
+	class _Getter(metaclass=SlotsMeta):
+		hash: ...
+
+		def __init__(self, hash):
+			self.hash = hash
+
+		def __eq__(self, x):
+			return hash(x) == self.hash
+
+	def __getattr__(self, x):
+		return self._Getter(self.hashes.get(x))
+
+	def __setattr__(self, x, v):
+		self.hashes[x] = hash(v)
 
 #class fields(abc.ABC):
 #	""" A collections.namedtuple-like structure with attribute initialization and type casting.
@@ -1569,7 +1688,7 @@ cerr = OStream(sys.stderr)
 cio = IOStream(sys.stdin, sys.stdout)
 
 class UserError(Exception): pass
-class WTFException(AssertionError): pass
+class WTFException(AssertionError, NotImplementedError): pass
 class TODO(NotImplementedError): pass
 class TEST(BaseException): pass
 class NonLoggingException(Exception): pass
