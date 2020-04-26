@@ -45,6 +45,7 @@ _imports = (
 	'bs4',
 	'cmd',
 	'dis',
+	'pdb',
 	'pip',
 	'pty',
 	'sys',
@@ -60,6 +61,7 @@ _imports = (
 	'stat',
 	'time',
 	'uuid',
+	'yaml',
 	'zlib',
 	'errno',
 	'queue',
@@ -121,6 +123,7 @@ _imports = (
 	'subprocess',
 	'collections',
 	'rlcompleter',
+	'unicodedata',
 	'aioprocessing',
 	'better_exchook',
 	'typing_inspect',
@@ -158,6 +161,7 @@ function = types.FunctionType
 method = types.MethodType
 generator = types.GeneratorType
 CodeType = types.CodeType
+TracebackType = types.TracebackType
 NoneType = type(None)
 inf = float('inf')
 nan = float('nan')
@@ -168,6 +172,7 @@ def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
 def isnumber(x): return isinstance(x, (int, float, complex))
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args); return kwargs
 def hex(x, l=2): return '0x%%0%dX' % l % x
+def md5(x): return hashlib.md5(x).hexdigest()
 def randstr(n=16, *, caseless=False, seed=None): return str().join((random.Random(seed) if (seed is not None) else random).choices(string.ascii_lowercase if (caseless) else string.ascii_letters, k=n))
 def safeexec():
 	try:
@@ -244,8 +249,9 @@ class Sdict(Stype, collections.defaultdict):
 
 	def discard(self):
 		for i in self._to_discard:
-			try: self.pop(i)
-			except IndexError: pass
+			#try: 
+			self.pop(i)
+			#except IndexError: pass
 		self._to_discard.clear()
 Sdefaultdict = Sdict
 
@@ -293,13 +299,15 @@ class Slist(Stype, list): # TODO: fix everywhere: type(x) == y --> isinstance(x,
 	#def wrap(self, 
 
 	_to_discard = set()
-	def to_discard(self, x):
-		self._to_discard.add(x)
+	def to_discard(self, ii):
+		self._to_discard.add(ii)
 
 	def discard(self):
-		for i in self._to_discard:
-			try: self.pop(i)
-			except IndexError: pass
+		to_del = [self[ii] for ii in self._to_discard]
+		for i in to_del:
+			#try: 
+			self.remove(i)
+			#except IndexError: pass
 		self._to_discard.clear()
 
 class Stuple(Slist): pass # TODO
@@ -377,7 +385,7 @@ class Sstr(Stype, str):
 		return Sstr().join(i for i in self if i in x)
 
 	def fit(self, l, *, end='…'):
-		return Sstr(self if (len(self) <= l) else self[:l-1]+end)
+		return Sstr(self if (len(self) <= l) else self[:l-len(end)]+end if (l >= len(end)) else '')
 
 	def cyclefit(self, l, n, *, sep=' '*8, start_delay=0, **kwargs):
 		if (len(self) <= l): return self
@@ -443,6 +451,9 @@ class Sstr(Stype, str):
 			if (i in sep): c = True
 		return Sstr().join(s)
 
+	def fullwidth(self):
+		return sum(c.isprintable() and not unicodedata.combining(c) for c in self)
+
 	def sub(self):
 		return self.translate(self._subtrans)
 
@@ -455,8 +466,8 @@ def Sbool(x=bool(), *args, **kwargs): # No way to derive a class from bool
 	return x.bool(*args, **kwargs) if (hasattr(x, 'bool')) else bool(x)
 
 def code_with(code, **kwargs):
-	if (sys.version_info >= (3, 8)): return code.replace(**{'co_'+k: v for k, v in kwargs.items()})
-	return CodeType(*(kwargs.get(i, getattr(code, 'co_'+i)) for i in ('argcount', 'kwonlyargcount', 'nlocals', 'stacksize', 'flags', 'code', 'consts', 'names', 'varnames', 'filename', 'name', 'firstlineno', 'lnotab', 'freevars', 'cellvars')))
+	if (sys.version_info >= (3, 8)): return code.replace(**{'co_'*(not k.startswith('co_'))+k: v for k, v in kwargs.items()})
+	return CodeType(*(kwargs.get(i, kwargs.get('co_'+i, getattr(code, 'co_'+i))) for i in ('argcount', 'kwonlyargcount', 'nlocals', 'stacksize', 'flags', 'code', 'consts', 'names', 'varnames', 'filename', 'name', 'firstlineno', 'lnotab', 'freevars', 'cellvars')))
 # TODO: func_with()
 
 def funcdecorator(df):
@@ -538,7 +549,7 @@ def dispatch(f):
 		else:
 			if (() in _overloaded_functions[fname]): r = _overloaded_functions[fname][()](*args, **kwargs)
 			else:
-				ex = DispatchError(f"Parameters {S(', ').join((*map(type, args), *map(type, kwargs.values()))).join('()')} don't match any of '{fname}' signatures:\n{S(overloaded_format_signatures(fname, f.__qualname__, sep=endl)).indent(2, char=' ')}") # to hide in tb
+				ex = DispatchError(f"Parameters {S(', ').join((*map(type, args), *map(type, kwargs.values()))).join('()')} don't match any of '{fname}' signatures:\n{S(overloaded_format_signatures(fname, f.__qualname__, sep=endl)).indent(2, char=' ')}\n(called as: `{fname}({', '.join((*(S(repr(i)).fit(32) for i in args), *(S(f'{k}={v}').fit(32) for k, v in kwargs.items())))})')") # to hide in tb
 				raise ex
 		retval = _overloaded_functions_retval[fname][k]
 		if (retval is not inspect._empty and not isinstance(r, retval)):
@@ -913,42 +924,62 @@ class DB:
 		self.file.seek(0)
 db = DB()
 
-def progress(cv, mv, pv="▏▎▍▌▋▊▉█", fill='░', border='│', prefix='', print=True): # TODO: maybe deprecate 🤔
-	return getattr(Progress(mv, chars=pv, border=border, prefix=prefix), 'print' if (print) else 'format')(cv)
+def progress(cv, mv, *, pv="▏▎▍▌▋▊▉█", fill='░', border='│', prefix='', fixed=True, print=True, **kwargs): # TODO: optimize
+	return getattr(Progress(mv, chars=pv, border=border, prefix=prefix, fixed=fixed, **kwargs), 'print' if (print) else 'format')(cv)
 
 class Progress:
-	def __init__(self, mv=-1, chars=' ▏▎▍▌▋▊▉█', border='│', prefix='', add_speed_eta=True):
-		self.mv, self.chars, self.border, self.prefix, self.add_speed_eta = mv, chars, border, prefix, add_speed_eta
-		self.fstr = self.prefix+'%d/%d (%d%%%s) '
+	__slots__ = ('mv', 'chars', 'border', 'fill', 'prefix', 'fixed', 'add_base', 'add_speed_eta', 'fstr', 'printed', 'started')
+
+	def __init__(self, mv=None, *, chars=' ▏▎▍▌▋▊▉█', border='│', fill=' ', prefix='', fixed=False, add_base=False, add_speed_eta=False):
+		if (fixed and mv is None): raise ValueError("`mv' must be specified when `fixed=True`")
+		self.mv, self.chars, self.border, self.fill, self.prefix, self.fixed, self.add_base, self.add_speed_eta = mv, chars, border, fill, prefix, fixed, add_base, add_speed_eta
+		if (fixed): l = len(S(mv))
+		self.fstr = self.prefix+('%s/%s (%d%%%s) ' if (not fixed) else f"%{l}s/%-{l}s (%-3d%%%s) ")
 		self.printed = bool()
 		self.started = None
 
 	def __del__(self):
-		if (self.printed): sys.stderr.write('\n')
+		try:
+			if (self.printed): sys.stderr.write('\n')
+		except AttributeError: pass
 
-	def format(self, cv, width, add_speed_eta=None):
+	def format(self, cv, width, *, add_base=None, add_speed_eta=None):
+		if (add_base is None): add_base = self.add_base
 		if (add_speed_eta is None): add_speed_eta = self.add_speed_eta
 		if (self.started is None): self.started = time.time(); add_speed_eta = False
-		if (not self.mv): self.mv = -1
-		r = self.fstr % (cv, self.mv, cv*100//self.mv, ', '+self.format_speed_eta(cv, self.mv, time.time()-self.started) if (add_speed_eta) else '')
-		return r+self.format_bar(cv, self.mv, width-len(r), chars=self.chars, border=self.border)
+		r = self.fstr % (*((cv, self.mv) if (not add_base) else map(self.format_base, (cv, self.mv)) if (add_base is True) else (self.format_base(i, base=add_base) for i in (cv, self.mv))), cv*100//self.mv, ', '+self.format_speed_eta(cv, self.mv, time.time()-self.started, fixed=self.fixed) if (add_speed_eta) else '')
+		return r+self.format_bar(cv, self.mv, width-len(r), chars=self.chars, border=self.border, fill=self.fill)
 
 	@staticmethod
-	def format_bar(cv, mv, width, chars=' ▏▎▍▌▋▊▉█', border='│'):
+	def format_bar(cv, mv, width, *, chars=' ▏▎▍▌▋▊▉█', border='│', fill=' '):
 		cv = max(0, min(mv, cv))
 		d = 100/(width-2)
 		fp, pp = divmod(cv*100/d, mv)
-		pb = chars[-1]*int(fp) + chars[int(pp/mv * len(chars))]*(cv != mv)
-		return border+(pb+' '*int(width-2-len(pb)))+border
+		pb = chars[-1]*int(fp) + chars[int(pp*len(chars)//mv)]*(cv != mv)
+		return f"{border}{pb.ljust(width-2, fill)}{border}"
 
 	@staticmethod
-	def format_speed_eta(cv, mv, elapsed):
-		speed, speed_u = cv/elapsed, 0
+	def format_speed_eta(cv, mv, elapsed, *, fixed=False):
+		speed = cv/elapsed
 		eta = math.ceil(mv/speed)-elapsed if (speed) else 0
-		eta = ' '.join(reversed(tuple(str(int(i))+'smhd'[ii] for ii, i in enumerate(S([eta%60, eta//60%60, eta//60//60%24, eta//60//60//24]).strip())))) if (eta > 0) else '?'
+		if (fixed): return (first(f"%2d{'dhms'[ii]}" % i for ii, i in enumerate((eta//60//60//24, eta//60//60%24, eta//60%60, eta%60)) if i) if (eta > 0) else ' ? ')+' ETA'
+		eta = ' '.join(f"{int(i)}{'dhms'[ii]}" for ii, i in enumerate((eta//60//60//24, eta//60//60%24, eta//60%60, eta%60)) if i) if (eta > 0) else '?'
+		speed_u = 0
 		for i in (60, 60, 24):
 			if (speed < 1): speed *= i; speed_u += 1
 		return '%d/%c, %s ETA' % (speed, 'smhd'[speed_u], eta)
+
+	@staticmethod
+	def format_base(cv, base=(1000, ' KMB')):
+		""" base: `(step, names)' [ex: `(1024, ('b', 'kb', 'mb', 'gb', 'tb')']
+		names should be non-decreasing in length for correct use in fixed-width mode.
+		whitespace character will be treated as nothing.
+		"""
+
+		step, names = base
+		l = len(names)
+		try: return first(f"{v}{b if (b != ' ') else ''}" for b, v in ((i, cv//(step**(l-ii))) for ii, i in enumerate(reversed(names), 1)) if v) # TODO: fractions; negative
+		except StopIteration: return '0'
 
 	def print(self, cv, *, out=sys.stderr, width=None, flush=True):
 		if (width is None): width = os.get_terminal_size()[0]
@@ -958,13 +989,13 @@ class Progress:
 
 class ProgressPool:
 	@dispatch
-	def __init__(self, *p: Progress):
-		self.p = list(p)
+	def __init__(self, *p: Progress, **kwargs):
+		self.p, self.kwargs = list(p), parseargs(kwargs, fixed=True)
 		self.ranges = list()
 
 	@dispatch
-	def __init__(self, n: int):
-		self.__init__(*(Progress() for _ in range(n)))
+	def __init__(self, n: int, **kwargs):
+		self.__init__(*(Progress(-1, **kwargs) for _ in range(n)), **kwargs)
 
 	def __del__(self):
 		for i in self.p: i.printed = False
@@ -983,8 +1014,8 @@ class ProgressPool:
 		if (stop is None): start, stop = 0, start
 		n = len(self.ranges)
 		self.ranges.append(int())
-		if (n == len(self.p)): self.p.append(Progress())
-		self.p[n].mv = stop-start
+		if (n == len(self.p)): self.p.append(Progress(stop-start, **self.kwargs))
+		else: self.p[n].mv = stop-start
 		for i in range(start, stop, step):
 			self.ranges[n] = i-start
 			if (n == len(self.p)-1): self.print(*self.ranges)
@@ -1033,9 +1064,9 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 		n = self.ranges
 		self.ranges += 1
 		if (n == len(self.p)):
-			self.p.append(Progress())
+			self.p.append(Progress(stop-start, **self.kwargs))
 			self.cvs.append(int())
-		self.p[n].mv = stop-start
+		else: self.p[n].mv = stop-start
 		for i in range(start, stop, step):
 			self.cvs[n] = i-start
 			yield i
@@ -1047,9 +1078,10 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 		sys.stderr.write('\r\033[K')
 		sys.stderr.flush()
 
-def progrange(start, stop=None, step=1):
+def progrange(start, stop=None, step=1, **kwargs):
+	parseargs(kwargs, fixed=True)
 	if (stop is None): start, stop = 0, start
-	p = Progress(stop-start)
+	p = Progress(stop-start, **kwargs)
 	for i in range(start, stop, step):
 		p.print(i-start)
 		yield i
@@ -1064,8 +1096,9 @@ def progiter(iterable: typing.Iterable):
 	l = tuple(iterable)
 	yield from (l[i] for i in progrange(len(l)))
 
-def testprogress(n=1000, sleep=0.002):
-	p = Progress(n)
+def testprogress(n=1000, sleep=0.002, **kwargs):
+	parseargs(kwargs, fixed=True)
+	p = Progress(n, **kwargs)
 	for i in range(n+1):
 		p.print(i)
 		time.sleep(sleep)
@@ -1454,6 +1487,15 @@ def singleton(C: type): C.__new__ = cachedfunction(C.__new__); return C()
 @dispatch
 def singleton(*args, **kwargs): return lambda C: C(*args, **kwargs)
 
+class aiobject:
+	async def __new__(cls, *args, **kwargs):
+		instance = super().__new__(cls)
+		await instance.__init__(*args, **kwargs)
+		return instance
+
+	async def __init__(self):
+		pass
+
 def noop(*_, **__): pass
 @singleton
 class noopf:
@@ -1538,6 +1580,7 @@ class paramset(set):
 
 	def __setattr__(self, x, y):
 		if (y): self.add(x)
+		else: self.discard(x)
 	__setitem__ = __setattr__
 
 	def __delattr__(self, x):
