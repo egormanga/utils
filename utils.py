@@ -56,6 +56,7 @@ _imports = (
 	'glob',
 	'gzip',
 	'html',
+	'http',
 	'json',
 	'math',
 	'stat',
@@ -86,6 +87,7 @@ _imports = (
 	'string',
 	'struct',
 	'typing',
+	'urllib',
 	'asyncio',
 	'aiohttp',
 	'bashlex',
@@ -96,6 +98,7 @@ _imports = (
 	'numbers',
 	'os.path',
 	'termios',
+	'urllib3',
 	'zipfile',
 	'aiocache',
 	'aiofiles',
@@ -119,6 +122,7 @@ _imports = (
 	'pyparsing',
 	'threading',
 	'traceback',
+	'wakeonlan',
 	'contextlib',
 	'subprocess',
 	'collections',
@@ -172,7 +176,7 @@ def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
 def isnumber(x): return isinstance(x, (int, float, complex))
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args); return kwargs
 def hex(x, l=2): return '0x%%0%dX' % l % x
-def md5(x): return hashlib.md5(x).hexdigest()
+def md5(x, n=1): return hashlib.md5(md5(x, n-1).encode() if (n > 1) else x).hexdigest()
 def randstr(n=16, *, caseless=False, seed=None): return str().join((random.Random(seed) if (seed is not None) else random).choices(string.ascii_lowercase if (caseless) else string.ascii_letters, k=n))
 def safeexec():
 	try:
@@ -384,6 +388,9 @@ class Sstr(Stype, str):
 	def __and__(self, x):
 		return Sstr().join(i for i in self if i in x)
 
+	def __or__(self, x):
+		return self if (self.strip()) else x
+
 	def fit(self, l, *, end='…'):
 		return Sstr(self if (len(self) <= l) else self[:l-len(end)]+end if (l >= len(end)) else '')
 
@@ -401,14 +408,15 @@ class Sstr(Stype, str):
 	def bool(self, minus_one=True):
 		return bool(self) and self.casefold() not in ('0', 'false', 'no', 'нет', '-1'*(not minus_one))
 
-	def indent(self, n=None, char=None, tab_width=8, foldempty=True):
+	def indent(self, n=None, char=None, *, tab_width=8, foldempty=True, first=True):
 		if (not self): return self
 		if (n is None): n = tab_width
 		r, n = n < 0, abs(n)
 		if (char is None): char = ('\t'*(n//tab_width)+' '*(n % tab_width)) if (not r) else ' '*n
 		else: char *= n
-		if (not r): res = char+('\n'+char).join(self.split('\n'))
-		else:       res = (char+'\n').join(self.split('\n'))+char
+		res = char if (first) else ''
+		if (not r): res = res+('\n'+char).join(self.split('\n'))
+		else:       res = (char+'\n').join(self.split('\n'))+res
 		if (foldempty): res = re.sub(r'^\s+?$', '', res, flags=re.M)
 		return Sstr(res)
 
@@ -771,8 +779,9 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	if ((l or 0) <= loglevel): logoutput.write(logstr); logoutput.flush()
 	return clearstr
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
-def dlog(*args, **kwargs): parseargs(kwargs, ll='\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m', tm=''); return log(*map(str, args), **kwargs)
-def dplog(*args, **kwargs): parseargs(kwargs, format=True, sep='\n'); return dlog(*args, **kwargs)
+def _dlog(*args, **kwargs): parseargs(kwargs, ll='\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m', tm=''); return log(*args, **kwargs)
+def dlog(*args, **kwargs): return _dlog(*map(str, args), **kwargs)
+def dplog(*args, **kwargs): parseargs(kwargs, format=True, sep='\n'); return _dlog(*args, **kwargs)
 def rlog(*args, **kwargs): parseargs(kwargs, raw=True); return log(*args, **kwargs)
 def logdumb(**kwargs): return log(raw=True, end='', **kwargs)
 def logstart(x):
@@ -1167,11 +1176,13 @@ def validate(l, d, nolog=False):
 	for i in d:
 		try:
 			t, e = d[i] if (type(d[i]) == tuple) else (d[i], 'True')
-			assert eval(e.format(t(l[i]))) if (type(e) == str) else e(t(l[i]))
+			r = eval(e.format(t(l[i]))) if (type(e) == str) else e(t(l[i]))
+			if (bool(r) == False): raise ValidationError(r)
 		except Exception as ex:
 			if (not nolog): log(2, "\033[91mValidation error:\033[0m %s" % ex)
 			return False
 	return True
+class ValidationError(AssertionError): pass
 
 def decline(n, w, prefix='', sep=' ', *, format=False, show_one=True):
 	if (isinstance(w, str)): w = (w,)*3
@@ -1216,6 +1227,11 @@ def average(x, default=None): return sum(x)/len(x) if (x) else default if (defau
 global_lambdas = list() # dunno why
 def global_lambda(l): global_lambdas.append(l); return global_lambdas[-1]
 
+@dispatch
+def singleton(C: type): C.__new__ = cachedfunction(C.__new__); return C()
+@dispatch
+def singleton(*args, **kwargs): return lambda C: C(*args, **kwargs)
+
 class lc:
 	def __init__(self, lc):
 		self.lc = lc
@@ -1238,12 +1254,17 @@ class ll:
 	def __exit__(self, type, value, tb):
 		setloglevel(self.pl)
 
+@singleton
 class timecounter:
 	def __init__(self):
 		self.started = None
 		self.ended = None
 
+	def __call__(self):
+		return self
+
 	def __enter__(self):
+		if (self is timecounter): self = type(self)()
 		self.started = time.time()
 		return self
 
@@ -1446,6 +1467,7 @@ class SlotsMeta(type):
 		__init_o__ = cls.__init__
 		def __init__(self, *args, **kwargs):
 			for k, v in annotations.items():
+				if (v is ...): continue
 				try: object.__getattribute__(self, k)
 				except AttributeError: object.__setattr__(self, k, v() if (isinstance(v, (type, function, method))) else v)
 			__init_o__(self, *args, **kwargs)
@@ -1481,11 +1503,6 @@ def instantiate(f):
 		r = f(*args, **kwargs)
 		return r() if (isinstance(r, type)) else r
 	return decorated
-
-@dispatch
-def singleton(C: type): C.__new__ = cachedfunction(C.__new__); return C()
-@dispatch
-def singleton(*args, **kwargs): return lambda C: C(*args, **kwargs)
 
 class aiobject:
 	async def __new__(cls, *args, **kwargs):
