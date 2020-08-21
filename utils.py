@@ -177,6 +177,8 @@ def isnumber(x): return isinstance(x, (int, float, complex))
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args); return kwargs
 def hex(x, l=2): return '0x%%0%dX' % l % x
 def md5(x, n=1): return hashlib.md5(md5(x, n-1).encode() if (n > 1) else x).hexdigest()
+def b64(x): return base64.b64encode(x if (isinstance(x, bytes)) else str(x).encode()).decode()
+def ub64(x): return base64.b64decode(x).decode()
 def randstr(n=16, *, caseless=False, seed=None): return str().join((random.Random(seed) if (seed is not None) else random).choices(string.ascii_lowercase if (caseless) else string.ascii_letters, k=n))
 def safeexec():
 	try:
