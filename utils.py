@@ -253,7 +253,7 @@ class Sdict(Stype, collections.defaultdict):
 
 	def discard(self):
 		for i in self._to_discard:
-			#try: 
+			#try:
 			self.pop(i)
 			#except IndexError: pass
 		self._to_discard.clear()
@@ -300,7 +300,7 @@ class Slist(Stype, list): # TODO: fix everywhere: type(x) == y --> isinstance(x,
 		was = set()
 		return Slist(was.add(key(i) if (key is not None) else i) or i for i in self if (key(i) if (key is not None) else i) not in was)  # such a dirty hack..
 
-	#def wrap(self, 
+	#def wrap(self,
 
 	_to_discard = set()
 	def to_discard(self, ii):
@@ -309,7 +309,7 @@ class Slist(Stype, list): # TODO: fix everywhere: type(x) == y --> isinstance(x,
 	def discard(self):
 		to_del = [self[ii] for ii in self._to_discard]
 		for i in to_del:
-			#try: 
+			#try:
 			self.remove(i)
 			#except IndexError: pass
 		self._to_discard.clear()
@@ -873,15 +873,22 @@ class DB:
 		self.setfile(file)
 		self.setserializer(serializer)
 		self.fields = dict()
-		self.setnolog(False)
-		self.setbackup(True)
+		self.nolog = False
+		self.backup = True
+		self.sensitive = False
 
-	def setfile(self, file):
-		self.file = file
-		if (file is None): return False
-		#if ('/' not in file): file = os.path.dirname(os.path.realpath(sys.argv[0]))+'/'+file
+	@dispatch
+	def setfile(self, file: NoneType):
+		self.file = None
+		return False
+
+	@dispatch
+	def setfile(self, file: str):
+		if ('/' not in file): file = os.path.join(os.path.dirname(os.path.realpath(sys.argv[0])), file)
+		file = os.path.expanduser(file)
 		try: self.file = open(file, 'r+b')
 		except FileNotFoundError: self.file = open(file, 'w+b')
+		if (self.sensitive): os.fchmod(self.file.fileno(), 0o600)
 		return True
 
 	def setnolog(self, nolog=True):
@@ -889,6 +896,12 @@ class DB:
 
 	def setbackup(self, backup):
 		self.backup = bool(backup)
+
+	def setsensitive(self, sensitive=True):
+		if (not sensitive and self.sensitive and self.file is not None):
+			umask = os.umask(0); os.umask(umask)
+			os.fchmod(self.file.fileno(), 0o666 ^ umask)
+		self.sensitive = bool(sensitive)
 
 	@dispatch
 	def setserializer(self, serializer: module):
@@ -1771,4 +1784,4 @@ if (__name__ == '__main__'):
 	log('\033[0mWhy\033[0;2m are u trying to run me?! It \033[0;93mtickles\033[0;2m!..\033[0m', raw=True)
 else: logimported()
 
-# by Sdore, 2019
+# by Sdore, 2020
