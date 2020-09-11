@@ -176,7 +176,7 @@ def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
 def isnumber(x): return isinstance(x, (int, float, complex))
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args); return kwargs
 def hex(x, l=2): return '0x%%0%dX' % l % x
-def md5(x, n=1): return hashlib.md5(md5(x, n-1).encode() if (n > 1) else x).hexdigest()
+def md5(x, n=1): x = x if (isinstance(x, bytes)) else str(x).encode(); return hashlib.md5(md5(x, n-1).encode() if (n > 1) else x).hexdigest()
 def b64(x): return base64.b64encode(x if (isinstance(x, bytes)) else str(x).encode()).decode()
 def ub64(x): return base64.b64decode(x).decode()
 def randstr(n=16, *, caseless=False, seed=None): return str().join((random.Random(seed) if (seed is not None) else random).choices(string.ascii_lowercase if (caseless) else string.ascii_letters, k=n))
@@ -247,6 +247,18 @@ class Sdict(Stype, collections.defaultdict):
 		r = self.copy()
 		r[key] = value
 		return r
+
+	def filter(self, value):
+		""" Return self without items with value equal to `value'. """
+		return Sdict({k: v for k, v in self.items() if v != value})
+
+	def filter_exact(self, value):
+		""" Return self without items with value `value' (by `is not' operator). """
+		return Sdict({k: v for k, v in self.items() if v is not value})
+
+	def filter_bool(self):
+		""" Return self without items for which `bool(value)' evaluates to `False'. """
+		return Sdict({k: v for k, v in self.items() if v})
 
 	_to_discard = set()
 
