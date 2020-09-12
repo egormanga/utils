@@ -162,6 +162,7 @@ loglevel = (cargs.v or 0)-(cargs.q or 0)
 
 # TODO: types.*
 function = types.FunctionType
+builtin_function_or_method = types.BuiltinFunctionType
 method = types.MethodType
 generator = types.GeneratorType
 CodeType = types.CodeType
@@ -186,6 +187,13 @@ def safeexec():
 		sys.stderr.flush()
 		return exec(sys.stdin.readline())
 	finally: sys.stderr.write('\033[0m')
+def export(x):
+	globals = inspect.stack()[1][0].f_globals
+	if ('__all__' not in globals): all = globals['__all__'] = list()
+	elif (not isinstance(globals['__all__'], list)): all = globals['__all__'] = list(globals['__all__'])
+	else: all = globals['__all__']
+	all.append(x.__name__.rpartition('.')[-1])
+	return x
 
 def S(x=None):
 	""" Convert `x' to an instance of corresponding S-type. """
@@ -492,10 +500,11 @@ def code_with(code, **kwargs):
 	return CodeType(*(kwargs.get(i, kwargs.get('co_'+i, getattr(code, 'co_'+i))) for i in ('argcount', 'kwonlyargcount', 'nlocals', 'stacksize', 'flags', 'code', 'consts', 'names', 'varnames', 'filename', 'name', 'firstlineno', 'lnotab', 'freevars', 'cellvars')))
 # TODO: func_with()
 
-def funcdecorator(df):
+def funcdecorator(df): # TODO: __dict__?
 	def ndf(f, *args, **kwargs):
 		if (not isinstance(f, function)): return lambda nf: ndf(nf, f, *args, **kwargs)
 		nf = df(f)
+		if (nf is f): return f
 		nf.__name__, nf.__qualname__, nf.__module__, nf.__doc__, nf.__annotations__, nf.__signature__ = \
 		 f.__name__,  f.__qualname__,  f.__module__,  f.__doc__, f.__annotations__, inspect.signature(f)
 		nf.__code__ = code_with(nf.__code__, name=f"<decorated '{f.__code__.co_name}'>" if (not f.__code__.co_name.startswith('<decorated ')) else f.__code__.co_name)
@@ -518,7 +527,7 @@ class DispatchError(TypeError): pass
 def dispatch_typecheck(o, t):
 	if (t is None or t is inspect._empty): return True
 	if (isinstance(o, DispatchFillValue) or isinstance(t, DispatchFillValue)): return False
-	if (isinstance(t, function)): return bool(t(o))
+	if (isinstance(t, (function, builtin_function_or_method))): return bool(t(o))
 	if (not isinstance(o, (typing_inspect.get_constraints(t) or type(o)) if (isinstance(t, typing.TypeVar)) else typing_inspect.get_origin(t) or t)): return False
 	if (isinstance(o, typing.Tuple) and typing_inspect.get_origin(t) and issubclass(typing_inspect.get_origin(t), typing.Tuple) and typing_inspect.get_args(t) and not all(itertools.starmap(dispatch_typecheck, itertools.zip_longest(o, typing_inspect.get_args(t), fillvalue=DispatchFillValue())))): return False
 	if (isinstance(o, typing.Iterable) and not isinstance(o, (typing.Iterator)) and typing_inspect.get_args(t) and not all(dispatch_typecheck(i, typing_inspect.get_args(t)[0]) for i in o)): return False
@@ -648,7 +657,9 @@ def init_defaults(f):
 def each(it): return tuple(it)
 
 @dispatch
-def tohashable(d: typing.Dict): return tuple(sorted((k, tohashable(v)) for k, v in d.items()))
+def tohashable(i: typing.Iterator): raise ValueError("Iterators are not hashable.")
+@dispatch
+def tohashable(d: typing.Dict): return tuple((k, tohashable(v)) for k, v in d.items())
 @dispatch
 def tohashable(s: str): return s
 @dispatch
@@ -656,7 +667,7 @@ def tohashable(l: typing.Iterable): return tuple(map(tohashable, l))
 @dispatch
 def tohashable(x: typing.Hashable): return x
 
-class cachedfunction: # TODO FIXME DEPRECATION (--> @functools.lru_cache; ~100 times faster)
+class cachedfunction:
 	def __init__(self, f):
 		self.f = f
 		self._cached = dict()
@@ -667,8 +678,8 @@ class cachedfunction: # TODO FIXME DEPRECATION (--> @functools.lru_cache; ~100 t
 		return self
 
 	def __call__(self, *args, **kwargs):
-		k = tohashable((args, kwargs))
 		if (self._obj is not None): args = (self._obj, *args)
+		k = tohashable((args, kwargs))
 		if (k not in self._cached): self._cached[k] = self.f(*args, **kwargs)
 		return self._cached[k]
 
@@ -679,6 +690,18 @@ class cachedfunction: # TODO FIXME DEPRECATION (--> @functools.lru_cache; ~100 t
 	def clear_cache(self):
 		self._cached.clear()
 class cachedclass(cachedfunction): pass
+
+@dispatch
+def lrucachedfunction(f: callable): return lrucachedfunction()(f)
+@dispatch
+def lrucachedfunction(maxsize=None, typed=True):
+	def decorator(f):
+		f = functools.lru_cache(maxsize=maxsize, typed=typed)(f)
+		f.nocache = f.__wrapped__
+		f.clear_cache = f.cache_clear
+		return f
+	return decorator
+def lrucachedclass(c): return lrucachedfunction(c)
 
 try: cachedproperty = functools.cached_property # TODO
 except AttributeError:
