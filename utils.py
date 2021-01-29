@@ -109,6 +109,7 @@ _imports = (
 	'datetime',
 	'operator',
 	'platform',
+	'pygments',
 	'readline',
 	'requests',
 	'tempfile',
@@ -150,8 +151,15 @@ def install_all_imports():
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
 
-#try: better_exchook.install()
-#except ModuleNotFoundError: pass
+if (sys.stderr.isatty()):
+	#try: better_exchook
+	#except ModuleNotFoundError: pass
+	#else:
+	#	sys._oldexcepthook = sys.excepthook
+	#	better_exchook.install()
+	try: pygments
+	except ModuleNotFoundError: pass
+	else: import pygments.lexers, pygments.formatters
 
 argparser = argparse.ArgumentParser(conflict_handler='resolve', add_help=False)
 argparser.add_argument('-v', action='count', help=argparse.SUPPRESS)
@@ -170,7 +178,7 @@ TracebackType = types.TracebackType
 NoneType = type(None)
 inf = float('inf')
 nan = float('nan')
-endl = '\n'
+nl = endl = '\n'
 
 def isiterable(x): return isinstance(x, typing.Iterable)
 def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
@@ -194,6 +202,7 @@ def export(x):
 	else: all = globals['__all__']
 	all.append(x.__name__.rpartition('.')[-1])
 	return x
+def suppress_tb(f): f.__code__ = code_with(f.__code__, firstlineno=0, lnotab=b''); return f
 
 def S(x=None):
 	""" Convert `x' to an instance of corresponding S-type. """
@@ -223,6 +232,17 @@ class Sdict(Stype, collections.defaultdict):
 		else: return
 		raise AttributeError(x)
 
+	def __missing__(self, k):
+		if (self.default_factory is None): raise KeyError(k)
+		try: r = self.default_factory()
+		except TypeError:
+			try: r = self.default_factory(k)
+			except TypeError: ok = False
+			else: ok = True
+			if (not ok): raise
+		self[k] = r
+		return r
+
 	def __and__(self, x):
 		""" Return self with applied .update(x). """
 		r = Sdict(self); r.update(x); return r
@@ -242,10 +262,10 @@ class Sdict(Stype, collections.defaultdict):
 
 	copy = __copy__
 
-	def translate(self, table, copy=False, strict=True, keep=True):
+	def translate(self, table, *, copy=False, strict=True, keep=True):
 		r = Sdict(self)
-		for i in table:
-			k, t = table[i] if (isinstance(table[i], (tuple, list))) else (table[i], lambda x: x)
+		for i, v in table.items():
+			k, t = v if (isinstance(v, (tuple, list))) else (v, lambda x: x)
 			if (not strict and k not in r): continue
 			if (keep and i not in r): r[i] = t((r.get if (copy) else r.pop)(k))
 		return r
@@ -279,6 +299,7 @@ class Sdict(Stype, collections.defaultdict):
 			self.pop(i)
 			#except IndexError: pass
 		self._to_discard.clear()
+		return self
 Sdefaultdict = Sdict
 
 class Slist(Stype, list): # TODO: fix everywhere: type(x) == y --> isinstance(x, y)
@@ -319,8 +340,8 @@ class Slist(Stype, list): # TODO: fix everywhere: type(x) == y --> isinstance(x,
 		return Slist(i for i in self if type(i) == t)
 
 	def uniquize(self, key=None):
-		was = set()
-		return Slist(was.add(key(i) if (key is not None) else i) or i for i in self if (key(i) if (key is not None) else i) not in was)  # such a dirty hack..
+		was = list()
+		return Slist(was.append(key(i) if (key is not None) else i) or i for i in self if (key(i) if (key is not None) else i) not in was)  # such a dirty hack.. upd. even more dirty for unhashable
 
 	#def wrap(self,
 
@@ -335,6 +356,7 @@ class Slist(Stype, list): # TODO: fix everywhere: type(x) == y --> isinstance(x,
 			self.remove(i)
 			#except IndexError: pass
 		self._to_discard.clear()
+		return self
 
 class Stuple(Slist): pass # TODO
 
@@ -423,7 +445,7 @@ class Sstr(Stype, str):
 
 	def join(self, l, *, first='', last=None):
 		l = tuple(map(str, l))
-		r = (str.join(self, l[:-1])+(last or self)+l[-1]) if (len(l) > 1) else l[0] if (l) else ''
+		r = (str.join(self, l[:-1])+((last if (isinstance(last, str)) else last[len(l) > 2]) if (last is not None) else self)+l[-1]) if (len(l) > 1) else l[0] if (l) else ''
 		if (r): r = first+r
 		return Sstr(r)
 
@@ -441,6 +463,13 @@ class Sstr(Stype, str):
 		else:       res = (char+'\n').join(self.split('\n'))+res
 		if (foldempty): res = re.sub(r'^\s+?$', '', res, flags=re.M)
 		return Sstr(res)
+
+	def unindent(self, n=None, char='\t', *, skipempty=True):
+		if (n is None): n = min(Sstr(i).lstripcount(char)[0] for i in self.split('\n') if not skipempty or i.strip())
+		return Sstr(re.sub(r'^'+char*n, '', self, flags=re.M)) if (n > 0) else self
+
+	def lstripcount(self, chars=None):
+		return lstripcount(self, chars=chars)
 
 	def just(self, n, char=' ', j=None):
 		if (j is None): j, n = '<>'[n>0], abs(n)
@@ -501,15 +530,20 @@ def code_with(code, **kwargs):
 # TODO: func_with()
 
 def funcdecorator(df): # TODO: __dict__?
+	@suppress_tb
 	def ndf(f, *args, **kwargs):
 		if (not isinstance(f, function)): return lambda nf: ndf(nf, f, *args, **kwargs)
+
 		nf = df(f)
 		if (nf is f): return f
+
+		nf = suppress_tb(nf) # TODO: option to disable
 		nf.__name__, nf.__qualname__, nf.__module__, nf.__doc__, nf.__annotations__, nf.__signature__ = \
 		 f.__name__,  f.__qualname__,  f.__module__,  f.__doc__, f.__annotations__, inspect.signature(f)
 		nf.__code__ = code_with(nf.__code__, name=f"<decorated '{f.__code__.co_name}'>" if (not f.__code__.co_name.startswith('<decorated ')) else f.__code__.co_name)
 		for i in filter(lambda x: not x.startswith('__'), dir(f)):
 			setattr(nf, i, getattr(f, i))
+
 		return nf
 
 	#dfsig, ndfsig = inspect.signature(df), inspect.signature(ndf)
@@ -544,6 +578,7 @@ def dispatch(f):
 	_overloaded_functions_retval[fname][params_annotation] = type(fsig.return_annotation) if (fsig.return_annotation is None) else fsig.return_annotation
 	_overloaded_functions_docstings[fname][fsig] = f.__doc__
 	#dplog([(dict(i), '—'*40) for i in _overloaded_functions[fname]], width=60) # XXX
+	@suppress_tb
 	def overloaded(*args, **kwargs):
 		args = list(args)
 		for k, v in _overloaded_functions[fname].items():
@@ -612,10 +647,11 @@ def format_inspect_signature(fsig):
 	return rendered
 
 def format_inspect_annotation(annotation):
-	return '<lambda>' if (isinstance(annotation, function)) else inspect.formatannotation(annotation)
+	return annotation.__name__ if (isinstance(annotation, function)) else inspect.formatannotation(annotation)
 
 def cast(*types): return lambda x: (t(i) if (not isinstance(i, t)) else i for t, i in zip(types, x))
 
+@suppress_tb
 def cast_call(f, *args, **kwargs):
 	fsig = inspect.signature(f)
 	try:
@@ -629,10 +665,10 @@ class CastError(TypeError): pass
 @funcdecorator
 def autocast(f):
 	""" Beware! leads to undefined behavior when used with @dispatch. """
-	r = lambda *args, **kwargs: cast_call(f, *args, **kwargs)
-	r.__annotations__ = f.__annotations__
-	return r
 
+	return lambda *args, **kwargs: cast_call(f, *args, **kwargs)
+
+@funcdecorator # XXX?
 def init_defaults(f):
 	""" Decorator that initializes type-annotated arguments which are not specified on function call.
 	You can also use lambdas as annotations.
@@ -650,9 +686,11 @@ def init_defaults(f):
 
 	Has no bugs.
 	"""
-	return lambda *args, **kwargs: f(*args, **S(kwargs) & {k: v() for k, v in f.__annotations__.items() if k not in kwargs})
+
 	#fsig = inspect.signature(f)
 	#return lambda *args, **kwargs: f(*args, **S(kwargs) & {k: v.annotation() for k, v in fsig.parameters.items() if (k not in kwargs and v.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY) and v.annotation is not inspect._empty)})
+
+	return lambda *args, **kwargs: f(*args, **S(kwargs) & {k: v() for k, v in f.__annotations__.items() if k not in kwargs})
 
 def each(it): return tuple(it)
 
@@ -668,6 +706,12 @@ def tohashable(l: typing.Iterable): return tuple(map(tohashable, l))
 def tohashable(x: typing.Hashable): return x
 
 class cachedfunction:
+	class _noncached:
+		__slots__ = ('value',)
+
+		def __init__(self, value):
+			self.value = value
+
 	def __init__(self, f):
 		self.f = f
 		self._cached = dict()
@@ -680,12 +724,20 @@ class cachedfunction:
 	def __call__(self, *args, **kwargs):
 		if (self._obj is not None): args = (self._obj, *args)
 		k = tohashable((args, kwargs))
-		if (k not in self._cached): self._cached[k] = self.f(*args, **kwargs)
+		if (k not in self._cached):
+			r = self.f(*args, **kwargs)
+			if (not isinstance(r, self._noncached)): self._cached[k] = r
+			else: return r.value
 		return self._cached[k]
 
 	def nocache(self, *args, **kwargs):
 		if (self._obj is not None): args = (self._obj, *args)
 		return self.f(*args, **kwargs)
+
+	def is_cached(self, *args, **kwargs):
+		if (self._obj is not None): args = (self._obj, *args)
+		k = tohashable((args, kwargs))
+		return (k in self._cached)
 
 	def clear_cache(self):
 		self._cached.clear()
@@ -748,6 +800,13 @@ def allannotations(cls: type):
 @dispatch
 def allannotations(obj): return allannotations(type(obj))
 
+@dispatch
+def allslots(cls: type):
+	""" Get slots tuple for all the MRO of class `cls' in right («super-to-sub») order. """
+	return tuple(j for i in cls.mro()[::-1] if hasattr(i, '__slots__') for j in i.__slots__)
+@dispatch
+def allslots(obj): return allannotations(type(obj))
+
 def spreadargs(f, okwargs, *args, **akwargs):
 	fsig = inspect.signature(f)
 	kwargs = S(okwargs) & akwargs
@@ -758,18 +817,25 @@ def spreadargs(f, okwargs, *args, **akwargs):
 		except KeyError: pass
 	return f(*args, **kwargs)
 
-def init(*names):
+def init(*names, **kwnames):
 	@funcdecorator
 	def decorator(f):
 		def decorated(self, *args, **kwargs):
+			missing = list()
 			for i in names:
-				setattr(self, i, kwargs.pop(i))
+				try: setattr(self, i, kwargs.pop(i))
+				except KeyError: missing.append(i)
+			for k, v in kwnames.items():
+				try: setattr(self, k, kwargs.pop(k))
+				except KeyError:
+					if (v is not ...): setattr(self, k, v() if (isinstance(v, (type, function, method))) else v)
+			if (missing): raise TypeError(f"""{f.__name__}() missing {decline(len(missing), ('argument', 'arguments'), sep=' required keyword-only ')}: {S(', ').join((i.join("''") for i in missing), last=(' and ', ', and '))}""")
 			return f(self, *args, **kwargs)
 		return decorated
 	return decorator
 
 logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
-noesc = re.compile(r'\033\[?[0-?]*[ -/]*[@-~]?')
+noesc = re.compile(r'\033 (?: \] \w* ; \w* ; [^\033]* (?: \033\\ | \x07) | \[? [0-?]* [ -/]* [@-~]?)', re.X)
 logfile = None
 logoutput = sys.stderr
 loglock = queue.LifoQueue()
@@ -848,7 +914,7 @@ _exc_handlers = set()
 def register_exc_handler(f): _exc_handlers.add(f)
 _logged_exceptions = set()
 @dispatch
-def exception(ex: BaseException, once=False, raw=False, nolog=False):
+def exception(ex: BaseException, *, once=False, raw=False, nolog=False, _caught=True):
 	""" Log an exception.
 	Parameters:
 		ex: exception to log.
@@ -859,12 +925,12 @@ def exception(ex: BaseException, once=False, raw=False, nolog=False):
 	if (once):
 		if (repr(ex) in _logged_exceptions): return
 		_logged_exceptions.add(repr(ex))
-	e = log(('\033[91mCaught ' if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+f"{ex.__class__.__qualname__}{(' on line '+'→'.join(map(lambda x: str(x[1]), traceback.walk_tb(ex.__traceback__)))).rstrip(' on line')}\033[0m{(': '+str(ex))*bool(str(ex))}", raw=raw)
+	e = log(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+f"{ex.__class__.__qualname__}{(' on line '+'->'.join(map(lambda x: str(x[1]), traceback.walk_tb(ex.__traceback__)))).rstrip(' on line')}\033[0m{(': '+str(ex))*bool(str(ex))}", raw=raw)
 	if (nolog): return
 	for i in _exc_handlers:
 		try: i(e, ex)
 		except Exception: pass
-logexception = exception
+def logexception(*args, **kwargs): return exception(*args, **kwargs, _caught=False)
 
 def raise_(ex): raise ex
 
@@ -1268,6 +1334,12 @@ def iter_queue(q):
 	while (q.qsize()): yield q.get()
 
 def first(l): return next(iter(l))
+def last(l):
+	l = iter(l)
+	r = next(l)
+	while (True):
+		try: r = next(l)
+		except StopIteration: return r
 
 def pm(x): return 1 if (x) else -1
 def constrain(x, lb, ub): return min(ub, max(lb, x))
@@ -1401,6 +1473,9 @@ class staticitemget:
 		self.f = f
 		self._fkeys = lambda self: ()
 
+	def __iter__(self):
+		raise ValueError("staticitemget is not iterable")
+
 	def __getitem__(self, x):
 		return self.f(*x) if (isinstance(x, tuple)) else self.f(x)
 
@@ -1515,6 +1590,7 @@ class SlotsMeta(type):
 		cls = super().__new__(metacls, name, bases, classdict)
 		if (not annotations): return cls
 		__init_o__ = cls.__init__
+		@suppress_tb
 		def __init__(self, *args, **kwargs):
 			for k, v in annotations.items():
 				if (v is ...): continue
@@ -1524,8 +1600,9 @@ class SlotsMeta(type):
 		cls.__init__ = __init__
 		#cls.__metaclass__ = metacls  # inheritance?
 		return cls
-
 class ABCSlotsMeta(SlotsMeta, abc.ABCMeta): pass
+class Slots(metaclass=SlotsMeta): pass
+class ABCSlots(metaclass=ABCSlotsMeta): pass
 
 class IndexedMeta(type):
 	class Indexer(dict):
@@ -1641,6 +1718,9 @@ class paramset(set):
 	def __hash__(self):
 		return hash(tuple(sorted(self)))
 
+	def __contains__(self, x):
+		return super().__contains__(str(x))
+
 	def __getattr__(self, x):
 		return str(x) in self
 	__getitem__ = __getattr__
@@ -1655,18 +1735,21 @@ class paramset(set):
 	__delitem__ = __delattr__
 
 	def add(self, x):
-		super().add(str(x))
+		return super().add(str(x))
 
 	def discard(self, x):
-		super().discard(str(x))
+		return super().discard(str(x))
 
 	def update(self, x):
-		super().update(map(str, x))
+		return super().update(map(str, x))
 
 class listmap:
 	def __init__(self):
 		self._keys = collections.deque()
 		self._values = collections.deque()
+
+	def __repr__(self):
+		return ', '.join(f"{k}: {v}" for k, v in zip(self._keys, self._values)).join('[]')
 
 	def __getitem__(self, k):
 		return self._values[self._keys.index(k)]
@@ -1760,13 +1843,130 @@ class hashset(metaclass=SlotsMeta):
 #		for k, v in self.__fields__.items():
 #			setattr(self, k, kwargs[k])
 
-def getsrc(x, clear_term=True):
+### XXX?
+#def lstripcount(s, chars=string.whitespace):
+#	for ii, i in enumerate(s):
+#		if (i not in chars): break
+#	else: ii = 0
+#	return (ii, s[ii:])
+###
+
+def lstripcount(s, chars=None):
+	ns = s.lstrip(chars)
+	return (len(s)-len(ns), ns)
+
+def Sexcepthook(exctype, exc, tb):
+	def _read(f):
+		try: return open(f).readlines()
+		except OSError: return None
+	srcs = Sdict(_read)
+	res = list()
+
+	for frame, lineno in traceback.walk_tb(tb):
+		code = frame.f_code
+		if (os.path.basename(code.co_filename) == 'runpy.py' and os.path.dirname(code.co_filename) in sys.path): continue
+
+		file = code.co_filename
+		name = code.co_name
+		src = srcs[code.co_filename]
+		lines = set()
+
+		if (src is not None and lineno > 0):
+			loff = float('inf')
+			found_name = bool()
+
+			for i in range(lineno-1, 0, -1):#frame.f_lineno
+				line = src[i]
+				if (line.isspace()): continue
+				if (i+1 == lineno): line = highlight(line)
+				cloff = lstripcount(line)[0]
+				if (cloff < loff or i+1 == lineno):
+					loff = cloff
+					if (not found_name and re.fullmatch(fr"\s*(?:def|class)\s+{name}\b.*(:|\(|\\)\s*(?:#.*)?", line)):
+						line = re.sub(fr"((?:def|class)\s+)({name})\b", '\\1\033[0;93m\\2\033[0;2m', line, 1)
+						found_name = True
+					lines.add((i+1, line))
+
+			#for i in range(*sorted((frame.f_lineno-1, lineno))):
+			#	lines.add((i+1, src[i]))
+
+		res.append((file, name, lineno, sorted(lines), frame))
+
+	if (res):
+		print("\033[91mTraceback\033[0m \033[2m(most recent call last)\033[0m:")
+		maxlnowidth = max((max(len(str(ln)) for ln, line in lines) for file, name, lineno, lines, frame in res if lines), default=0)
+
+	for file, name, lineno, lines, frame in res:
+		if (os.path.commonpath((os.path.abspath(file), os.getcwd())) != '/'): file = os.path.relpath(file)
+		if (lines or lineno > 0): print(f"  File \033[2;96m{os.path.dirname(file)+os.path.sep if (os.path.dirname(file)) else ''}\033[0;96m{os.path.basename(file)}\033[0m, in \033[93m{name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}")
+		else: print(f"  \033[2mFile \033[36m{os.path.dirname(file)+os.path.sep if (os.path.dirname(file)) else ''}\033[96m{os.path.basename(file)}\033[0;2m, in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[0m")
+
+		for ii, (ln, line) in enumerate(lines):
+			print(end=' '*(8+(maxlnowidth-len(str(ln)))))
+			#if (ln == lineno): print(end='\033[1m')
+			if (ii != len(lines)-1): print(end='\033[2m')
+			print(ln, end='\033[0m ')
+			print('\033[2m│', end='\033[0m ')
+			if (ln == lineno): print(end='\033[1m')
+			if (ii != len(lines)-1): print(end='\033[2m')
+			print(line.rstrip().expandtabs(4), end='\033[0m\n') #'\033[0m'+ # XXX?
+
+		if (lines):
+			#try: c = compile(lines[-1][1].strip(), '', 'exec')
+			#except SyntaxError:
+			c = frame.f_code
+
+			words = re.split(r'\W', lines[-1][1])
+			for i in sorted({*c.co_cellvars, *c.co_freevars, *c.co_names, *c.co_varnames}, key=lambda x: words.index(x) if x in words else 0):
+				if (i not in words): continue
+
+				v = None
+				for color, ns in ((93, frame.f_locals), (92, frame.f_globals)): #, (95, builtins.__dict__)):
+					try: r = S(repr(ns[i])).indent(first=False)
+					except KeyError: continue
+					except Exception as ex: r = f"<exception in {i}.__repr__(): {repr(ex)}>"
+					v = f"\033[{color}m{r}\033[0m"
+					break
+				#else:
+				#	if (i not in builtins.__dict__): v = '\033[2m<not found>\033[0m'
+
+				if (v is not None): print(f"{' '*12}\033[94m{i}\033[0;2m: {v}")
+
+	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[2m{exctype.__name__}\033[0m")
+	else: print(f"\033[1;91m{exctype.__name__}\033[0m{': '*bool(str(exc))}{exc}")
+
+if (sys.stderr.isatty()):
+	if (not hasattr(sys, '_oldexcepthook')): sys._oldexcepthook = sys.excepthook
+	sys.excepthook = Sexcepthook
+
+#@dispatch
+def highlight(s: str): return pygments.highlight(s, pygments.lexers.PythonLexer(), pygments.formatters.TerminalFormatter(bg='dark'))
+
+def getsrc(x, *, color=True, clear_term=True, ret=False):
 	if (clear_term): clear()
-	print(inspect.getsource(x))
+	r = inspect.getsource(x)
+	if (color and sys.stderr.isatty()): r = highlight(r)
+	if (ret): return r
+	else: print(r)
 
 def preeval(f):
         r = f()
         return lambda: r
+
+class grep(Slots):
+	expr: ...
+	flags: ...
+	sep: ...
+
+	@init(sep='\n')
+	def __init__(self, expr, flags=0):
+		self.expr, self.flags = expr, flags
+
+	def __ror__(self, x):
+		for l in noesc.sub('', str(x)).split(self.sep):
+			m = re.search(self.expr, l, self.flags)
+			if (m is None): continue
+			print(re.sub(self.expr.join('()'), '\033[1;91m\\1\033[0m', l))
 
 #def printf(format, *args, file=sys.stdout, flush=False): print(format % args, end='', file=file, flush=flush)  # breaks convenience of 'pri-' tab-completion.
 class _CStream: # because I can.
@@ -1821,4 +2021,4 @@ if (__name__ == '__main__'):
 	log('\033[0mWhy\033[0;2m are u trying to run me?! It \033[0;93mtickles\033[0;2m!..\033[0m', raw=True)
 else: logimported()
 
-# by Sdore, 2020
+# by Sdore, 2021
