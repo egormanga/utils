@@ -50,6 +50,7 @@ _imports = (
 	'pty',
 	'sys',
 	'tty',
+	'bson',
 	'code',
 	'copy',
 	'dill',
@@ -203,6 +204,8 @@ def export(x):
 	all.append(x.__name__.rpartition('.')[-1])
 	return x
 def suppress_tb(f): f.__code__ = code_with(f.__code__, firstlineno=0, lnotab=b''); return f
+
+def terminal_link(link, text=None): return f"\033]8;;{noesc.sub('', link)}\033\\{text if (text is not None) else link}\033]8;;\033\\"
 
 def S(x=None):
 	""" Convert `x' to an instance of corresponding S-type. """
@@ -529,7 +532,9 @@ def code_with(code, **kwargs):
 	return CodeType(*(kwargs.get(i, kwargs.get('co_'+i, getattr(code, 'co_'+i))) for i in ('argcount', 'kwonlyargcount', 'nlocals', 'stacksize', 'flags', 'code', 'consts', 'names', 'varnames', 'filename', 'name', 'firstlineno', 'lnotab', 'freevars', 'cellvars')))
 # TODO: func_with()
 
-def funcdecorator(df): # TODO: __dict__?
+def funcdecorator(df=None, /, *, suppresstb=True): # TODO: __dict__?
+	if (df is None): return lambda df: funcdecorator(df, suppresstb=suppresstb)
+
 	@suppress_tb
 	def ndf(f, *args, **kwargs):
 		if (not isinstance(f, function)): return lambda nf: ndf(nf, f, *args, **kwargs)
@@ -537,7 +542,7 @@ def funcdecorator(df): # TODO: __dict__?
 		nf = df(f)
 		if (nf is f): return f
 
-		nf = suppress_tb(nf) # TODO: option to disable
+		if (suppresstb): nf = suppress_tb(nf) # TODO: option to disable
 		nf.__name__, nf.__qualname__, nf.__module__, nf.__doc__, nf.__annotations__, nf.__signature__ = \
 		 f.__name__,  f.__qualname__,  f.__module__,  f.__doc__, f.__annotations__, inspect.signature(f)
 		nf.__code__ = code_with(nf.__code__, name=f"<decorated '{f.__code__.co_name}'>" if (not f.__code__.co_name.startswith('<decorated ')) else f.__code__.co_name)
@@ -615,7 +620,7 @@ def dispatch(f):
 		else:
 			if (() in _overloaded_functions[fname]): r = _overloaded_functions[fname][()](*args, **kwargs)
 			else:
-				ex = DispatchError(f"Parameters {S(', ').join((*map(type, args), *map(type, kwargs.values()))).join('()')} don't match any of '{fname}' signatures:\n{S(overloaded_format_signatures(fname, f.__qualname__, sep=endl)).indent(2, char=' ')}\n(called as: `{fname}({', '.join((*(S(repr(i)).fit(32) for i in args), *(S(f'{k}={v}').fit(32) for k, v in kwargs.items())))})')") # to hide in tb
+				ex = DispatchError(f"Parameters {S(', ').join((*map(type, args), *(f'{k}={type(v)}' for k, v in kwargs.items()))).join('()')} don't match any of '{fname}' signatures:\n{S(overloaded_format_signatures(fname, f.__qualname__, sep=endl)).indent(2, char=' ')}\n(called as: `{fname}({', '.join((*(S(repr(i)).fit(32) for i in args), *(S(f'{k}={v}').fit(32) for k, v in kwargs.items())))})')") # to hide in tb
 				raise ex
 		retval = _overloaded_functions_retval[fname][k]
 		if (retval is not inspect._empty and not isinstance(r, retval)):
@@ -925,7 +930,7 @@ def exception(ex: BaseException, *, once=False, raw=False, nolog=False, _caught=
 	if (once):
 		if (repr(ex) in _logged_exceptions): return
 		_logged_exceptions.add(repr(ex))
-	e = log(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+f"{ex.__class__.__qualname__}{(' on line '+'->'.join(map(lambda x: str(x[1]), traceback.walk_tb(ex.__traceback__)))).rstrip(' on line')}\033[0m{(': '+str(ex))*bool(str(ex))}", raw=raw)
+	e = log(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+ex.__class__.__qualname__+(' on line '+' -> '.join(terminal_link(f'file://{socket.gethostname()}'+os.path.realpath(i[0].f_code.co_filename) if (os.path.exists(i[0].f_code.co_filename)) else i[0].f_code.co_filename, i[1]) for i in traceback.walk_tb(ex.__traceback__) if i[1])).rstrip(' on line')+'\033[0m'+(': '+str(ex))*bool(str(ex)), raw=raw)
 	if (nolog): return
 	for i in _exc_handlers:
 		try: i(e, ex)
@@ -1053,13 +1058,11 @@ def progress(cv, mv, *, pv="▏▎▍▌▋▊▉█", fill='░', border='│',
 	return getattr(Progress(mv, chars=pv, border=border, prefix=prefix, fixed=fixed, **kwargs), 'print' if (print) else 'format')(cv)
 
 class Progress:
-	__slots__ = ('mv', 'chars', 'border', 'fill', 'prefix', 'fixed', 'add_base', 'add_speed_eta', 'fstr', 'printed', 'started')
+	__slots__ = ('mv', 'chars', 'border', 'fill', 'prefix', 'fixed', 'add_base', 'add_speed_eta', 'printed', 'started', '_pool')
 
-	def __init__(self, mv=None, *, chars=' ▏▎▍▌▋▊▉█', border='│', fill=' ', prefix='', fixed=False, add_base=False, add_speed_eta=False):
+	def __init__(self, mv=None, *, chars=' ▏▎▍▌▋▊▉█', border='│', fill=' ', prefix='', fixed=False, add_base=False, add_speed_eta=False, _pool=None):
 		if (fixed and mv is None): raise ValueError("`mv' must be specified when `fixed=True`")
-		self.mv, self.chars, self.border, self.fill, self.prefix, self.fixed, self.add_base, self.add_speed_eta = mv, chars, border, fill, prefix, fixed, add_base, add_speed_eta
-		if (fixed): l = len(S(mv))
-		self.fstr = self.prefix+('%s/%s (%d%%%s) ' if (not fixed) else f"%{l}s/%-{l}s (%-3d%%%s) ")
+		self.mv, self.chars, self.border, self.fill, self.prefix, self.fixed, self.add_base, self.add_speed_eta, self._pool = mv, chars, border, fill, prefix, fixed, add_base, add_speed_eta, _pool
 		self.printed = bool()
 		self.started = None
 
@@ -1072,7 +1075,10 @@ class Progress:
 		if (add_base is None): add_base = self.add_base
 		if (add_speed_eta is None): add_speed_eta = self.add_speed_eta
 		if (self.started is None): self.started = time.time(); add_speed_eta = False
-		r = self.fstr % (*((cv, self.mv) if (not add_base) else map(self.format_base, (cv, self.mv)) if (add_base is True) else (self.format_base(i, base=add_base) for i in (cv, self.mv))), cv*100//self.mv, ', '+self.format_speed_eta(cv, self.mv, time.time()-self.started, fixed=self.fixed) if (add_speed_eta) else '')
+
+		l = self.l(add_base) if (self._pool is None) else max(i.l(add_base) for i in self._pool.p)
+		fstr = self.prefix+('%s/%s (%d%%%s) ' if (not self.fixed) else f"%{l}s/%-{l}s (%-3d%%%s) ")
+		r = fstr % (*((cv, self.mv) if (not add_base) else map(self.format_base, (cv, self.mv)) if (add_base is True) else (self.format_base(i, base=add_base) for i in (cv, self.mv))), cv*100//self.mv, ', '+self.format_speed_eta(cv, self.mv, time.time()-self.started, fixed=self.fixed) if (add_speed_eta) else '')
 		return r+self.format_bar(cv, self.mv, width-len(r), chars=self.chars, border=self.border, fill=self.fill)
 
 	@staticmethod
@@ -1095,7 +1101,7 @@ class Progress:
 		return '%d/%c, %s ETA' % (speed, 'smhd'[speed_u], eta)
 
 	@staticmethod
-	def format_base(cv, base=(1000, ' KMB')):
+	def format_base(cv, base=(1000, ' KMB'), *, _calc_len=False):
 		""" base: `(step, names)' [ex: `(1024, ('b', 'kb', 'mb', 'gb', 'tb')']
 		names should be non-decreasing in length for correct use in fixed-width mode.
 		whitespace character will be treated as nothing.
@@ -1103,7 +1109,8 @@ class Progress:
 
 		step, names = base
 		l = len(names)
-		try: return first(f"{v}{b if (b != ' ') else ''}" for b, v in ((i, cv//(step**(l-ii))) for ii, i in enumerate(reversed(names), 1)) if v) # TODO: fractions; negative
+		if (_calc_len): sl, nl = len(S(step))-1, max(map(len, names))
+		try: return first((f"{{: {sl+nl}}}".format(v) if (_calc_len) else str(v))+(b if (b != ' ') else '') for b, v in ((i, cv//(step**(l-ii))) for ii, i in enumerate(reversed(names), 1)) if v) # TODO: fractions; negative
 		except StopIteration: return '0'
 
 	def print(self, cv, *, out=sys.stderr, width=None, flush=True):
@@ -1112,18 +1119,28 @@ class Progress:
 		if (flush): out.flush()
 		self.printed = (out == sys.stderr)
 
+	def l(self, add_base):
+		return len(S(self.mv)) if (not add_base) else len(self.format_base(self.mv, _calc_len=True) if (add_base is True) else self.format_base(self.mv, base=add_base, _calc_len=True))
+
 class ProgressPool:
+	#@dispatch
+	#def __init__(self, *p: Progress, **kwargs):
+	#	self.p, self.kwargs = list(p), parseargs(kwargs, fixed=True)
+	#	for i in self.p:
+	#		i._pool = self
+	#	self.ranges = list()
+
 	@dispatch
-	def __init__(self, *p: Progress, **kwargs):
-		self.p, self.kwargs = list(p), parseargs(kwargs, fixed=True)
+	def __init__(self, n: int = 0, **kwargs):
+		#self.__init__(*(Progress(-1, **kwargs, _pool=self) for _ in range(n)), **kwargs)
+		self.p, self.kwargs = [Progress(-1, **parseargs(kwargs, fixed=True), _pool=self) for _ in range(n)], kwargs
 		self.ranges = list()
 
-	@dispatch
-	def __init__(self, n: int, **kwargs):
-		self.__init__(*(Progress(-1, **kwargs) for _ in range(n)), **kwargs)
-
 	def __del__(self):
-		for i in self.p: i.printed = False
+		try:
+			for i in self.p:
+				i.printed = False
+		except AttributeError: pass
 		sys.stderr.write('\033[J')
 		sys.stderr.flush()
 
@@ -1135,11 +1152,11 @@ class ProgressPool:
 		if (ii): sys.stderr.write(f"\033[{ii}A")
 		sys.stderr.flush()
 
-	def range(self, start, stop=None, step=1):
+	def range(self, start, stop=None, step=1, **kwargs):
 		if (stop is None): start, stop = 0, start
 		n = len(self.ranges)
 		self.ranges.append(int())
-		if (n == len(self.p)): self.p.append(Progress(stop-start, **self.kwargs))
+		if (n == len(self.p)): self.p.append(Progress(stop-start, **parseargs(kwargs, **self.kwargs), _pool=self))
 		else: self.p[n].mv = stop-start
 		for i in range(start, stop, step):
 			self.ranges[n] = i-start
@@ -1148,15 +1165,16 @@ class ProgressPool:
 		self.ranges[n] = stop
 		self.print(*self.ranges)
 		self.ranges.pop()
+		self.p.pop()
 
 	@dispatch
-	def iter(self, iterator: typing.Iterator, l: int, step: int = 1):
-		yield from (next(iterator) for _ in self.range(l, step=step))
+	def iter(self, iterator: typing.Iterator, l: int, step: int = 1, **kwargs):
+		yield from (next(iterator) for _ in self.range(l, step=step, **kwargs))
 
 	@dispatch
-	def iter(self, iterable: typing.Iterable):
+	def iter(self, iterable: typing.Iterable, **kwargs):
 		it = tuple(iterable)
-		yield from (it[i] for i in self.range(len(it)))
+		yield from (it[i] for i in self.range(len(it), **kwargs))
 
 	def done(self, width=None):
 		self.print(*(i.mv for i in self.p), width=width)
@@ -1184,18 +1202,19 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 			unlocklog()
 			time.sleep(self.delay)
 
-	def range(self, start, stop=None, step=1):
+	def range(self, start, stop=None, step=1, **kwargs):
 		if (stop is None): start, stop = 0, start
 		n = self.ranges
 		self.ranges += 1
 		if (n == len(self.p)):
-			self.p.append(Progress(stop-start, **self.kwargs))
+			self.p.append(Progress(stop-start, **parseargs(kwargs, **self.kwargs), _pool=self))
 			self.cvs.append(int())
 		else: self.p[n].mv = stop-start
 		for i in range(start, stop, step):
 			self.cvs[n] = i-start
 			yield i
 		self.ranges -= 1
+		self.p.pop()
 
 	def stop(self):
 		self.stopped = True
@@ -1671,7 +1690,7 @@ def apmain(f):
 	return decorated
 
 def apcmd(*args, **kwargs):
-	@funcdecorator
+	@funcdecorator(suppresstb=False)
 	def decorator(f):
 		nonlocal args, kwargs
 		subparser = getsubparser(argparser, *args, **kwargs).add_parser(f.__name__.rstrip('_'), help=f.__doc__)
@@ -1684,10 +1703,11 @@ def apcmd(*args, **kwargs):
 	return decorator
 
 def aparg(*args, **kwargs):
-	@funcdecorator
+	@funcdecorator(suppresstb=False)
 	def decorator(f):
 		if (not hasattr(f, '_argdefs')):
 			of = f
+			@suppress_tb
 			def f(cargs):
 				for args, kwargs in f._argdefs:
 					argparser.add_argument(*args, **kwargs)
@@ -1878,7 +1898,9 @@ def Sexcepthook(exctype, exc, tb):
 			for i in range(lineno-1, 0, -1):#frame.f_lineno
 				line = src[i]
 				if (line.isspace()): continue
-				if (i+1 == lineno): line = highlight(line)
+				if (i+1 == lineno):
+					try: line = highlight(line)
+					except Exception: pass
 				cloff = lstripcount(line)[0]
 				if (cloff < loff or i+1 == lineno):
 					loff = cloff
@@ -1898,8 +1920,10 @@ def Sexcepthook(exctype, exc, tb):
 
 	for file, name, lineno, lines, frame in res:
 		if (os.path.commonpath((os.path.abspath(file), os.getcwd())) != '/'): file = os.path.relpath(file)
-		if (lines or lineno > 0): print(f"  File \033[2;96m{os.path.dirname(file)+os.path.sep if (os.path.dirname(file)) else ''}\033[0;96m{os.path.basename(file)}\033[0m, in \033[93m{name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}")
-		else: print(f"  \033[2mFile \033[36m{os.path.dirname(file)+os.path.sep if (os.path.dirname(file)) else ''}\033[96m{os.path.basename(file)}\033[0;2m, in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[0m")
+		filepath = (os.path.dirname(file)+os.path.sep if (os.path.dirname(file)) else '')
+		link = f'file://{socket.gethostname()}'+os.path.realpath(file) if (os.path.exists(file)) else file
+		if (lines or lineno > 0): print('  File '+terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(file)}\033[0m")+f", in \033[93m{name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}")
+		else: print('  \033[2mFile '+terminal_link(link, f"\033[36m{filepath}\033[96m{os.path.basename(file)}\033[0;2m")+f", in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[0m")
 
 		for ii, (ln, line) in enumerate(lines):
 			print(end=' '*(8+(maxlnowidth-len(str(ln)))))
@@ -1934,6 +1958,10 @@ def Sexcepthook(exctype, exc, tb):
 
 	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[2m{exctype.__name__}\033[0m")
 	else: print(f"\033[1;91m{exctype.__name__}\033[0m{': '*bool(str(exc))}{exc}")
+
+	if (exc.__cause__ is not None):
+		print(" \033[1m> This exception was caused by:\033[0m\n")
+		Sexcepthook(type(exc.__cause__), exc.__cause__, exc.__cause__.__traceback__)
 
 if (sys.stderr.isatty()):
 	if (not hasattr(sys, '_oldexcepthook')): sys._oldexcepthook = sys.excepthook
