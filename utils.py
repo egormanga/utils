@@ -114,11 +114,13 @@ _imports = (
 	'readline',
 	'requests',
 	'tempfile',
+	'warnings',
 	'fractions',
 	'functools',
 	'importlib',
 	'ipaddress',
 	'itertools',
+	'linecache',
 	'mimetypes',
 	'netifaces',
 	'pyparsing',
@@ -152,15 +154,14 @@ def install_all_imports():
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
 
-if (sys.stderr.isatty()):
-	#try: better_exchook
-	#except ModuleNotFoundError: pass
-	#else:
-	#	sys._oldexcepthook = sys.excepthook
-	#	better_exchook.install()
-	try: pygments
-	except ModuleNotFoundError: pass
-	else: import pygments.lexers, pygments.formatters
+### [replaced by Sexcepthook]
+#if (sys.stderr.isatty()):
+#	try: better_exchook
+#	except ModuleNotFoundError: pass
+#	else:
+#		sys._oldexcepthook = sys.excepthook
+#		better_exchook.install()
+###
 
 argparser = argparse.ArgumentParser(conflict_handler='resolve', add_help=False)
 argparser.add_argument('-v', action='count', help=argparse.SUPPRESS)
@@ -839,6 +840,14 @@ def init(*names, **kwnames):
 		return decorated
 	return decorator
 
+@dispatch
+def with_signature(fsig: str):
+	def decorator(f):
+		f.__text_signature__ = fsig
+		inspect.signature(f)  # validate
+		return f
+	return decorator
+
 logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
 noesc = re.compile(r'\033 (?: \] \w* ; \w* ; [^\033]* (?: \033\\ | \x07) | \[? [0-?]* [ -/]* [@-~]?)', re.X)
 logfile = None
@@ -919,10 +928,11 @@ _exc_handlers = set()
 def register_exc_handler(f): _exc_handlers.add(f)
 _logged_exceptions = set()
 @dispatch
-def exception(ex: BaseException, *, once=False, raw=False, nolog=False, _caught=True):
+def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=False, _caught=True):
 	""" Log an exception.
 	Parameters:
 		ex: exception to log.
+		extra: additional info to log.
 		nolog: no not call exc_handlers.
 	"""
 	ex = unraise(ex)
@@ -930,7 +940,7 @@ def exception(ex: BaseException, *, once=False, raw=False, nolog=False, _caught=
 	if (once):
 		if (repr(ex) in _logged_exceptions): return
 		_logged_exceptions.add(repr(ex))
-	e = log(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+ex.__class__.__qualname__+(' on line '+' -> '.join(terminal_link(f'file://{socket.gethostname()}'+os.path.realpath(i[0].f_code.co_filename) if (os.path.exists(i[0].f_code.co_filename)) else i[0].f_code.co_filename, i[1]) for i in traceback.walk_tb(ex.__traceback__) if i[1])).rstrip(' on line')+'\033[0m'+(': '+str(ex))*bool(str(ex)), raw=raw)
+	e = log(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+ex.__class__.__qualname__+(' on line '+' -> '.join(terminal_link(f'file://{socket.gethostname()}'+os.path.realpath(i[0].f_code.co_filename) if (os.path.exists(i[0].f_code.co_filename)) else i[0].f_code.co_filename, i[1]) for i in traceback.walk_tb(ex.__traceback__) if i[1])).rstrip(' on line')+'\033[0m'+(': '+str(ex))*bool(str(ex))+('\033[0;2m; ('+str(extra)+')\033[0m' if (extra is not None) else ''), raw=raw)
 	if (nolog): return
 	for i in _exc_handlers:
 		try: i(e, ex)
@@ -1319,22 +1329,38 @@ def validate(l, d, nolog=False):
 	return True
 class ValidationError(AssertionError): pass
 
-def decline(n, w, prefix='', sep=' ', *, format=False, show_one=True):
-	if (isinstance(w, str)): w = (w,)*3
-	elif (len(w) == 1): w *= 3
-	elif (len(w) == 2): w = (*w, w[-1])
+#@with_signature("(n, first[, second[, third[, fourth]], other], /, *, zeroth=other, prefix='', sep=' ', format=False, show_one=True)")
+def decline(n, first, second=None, third=None, fourth=None, other=None, /, *, zeroth=None, prefix='', sep=' ', format=False, show_one=True):
+	""" decline(n, first[, second[, third[, fourth]], other], /, *, zeroth=other, prefix='', sep=' ', format=False, show_one=True) """
 
-	if (isinstance(prefix, str)): prefix = (prefix,)*3
-	elif (len(prefix) == 1): prefix *= 3
+	if (not isinstance(first, str)):
+		l = list(first)
+		first = l.pop(0)
+		if (l): second = l.pop(0)
+		if (l): third = l.pop(0)
+		if (l): fourth = l.pop(0)
+		if (l): other = l.pop(0)
+		if (l): raise ValueError(l)
+	if (second is None): second = first
+	if (third is None): third = second
+	if (fourth is None): third, fourth, other = second, second, third
+	if (other is None): other = fourth
+	if (zeroth is None): zeroth = other
+
+	if (isinstance(prefix, str)): prefix = (prefix,)*5
+	elif (len(prefix) == 1): prefix *= 5
 	elif (len(prefix) == 2): prefix = (*prefix, prefix[-1])
 
-	if (5 <= abs(n % 100) <= 20): q = 0
+	if (5 <= abs(n % 100) <= 20): q = 9
 	else: q = abs(n) % 10
-	if (q == 1): r, p = w[0], prefix[0]
-	elif (2 <= q <= 4): r, p = w[1], prefix[1]
-	else: r, p = w[2], prefix[2]
+	if (q == 0): r, p = zeroth, prefix[-1]
+	elif (q == 1): r, p = first, prefix[0]
+	elif (q == 2): r, p = second, prefix[1]
+	elif (q == 3): r, p = third, prefix[2]
+	elif (q == 4): r, p = fourth, prefix[-2]
+	else: r, p = other, prefix[-1]
 	return f"{p}{str(S(n).format(' ' if (format is True) else format) if (format) else n)+sep if (n != 1 or show_one) else ''}{r}"
-def testdecline(w): return '\n'.join([decline(i, w) for i in range(10)])
+def testdecline(*args, **kwargs): return '\n'.join(decline(i, *args, **kwargs) for i in range(31))
 
 def _timeago(s=-1): # TODO
 	if (s == -1): s = time.time()
@@ -1719,6 +1745,33 @@ def aparg(*args, **kwargs):
 		return f
 	return decorator
 
+class VarInt:
+	@staticmethod
+	def read(s):
+		r = int()
+		i = int()
+		while (True):
+			b = s.read(1)[0]
+			r |= (b & 0x7f) << (7*i)
+			if (not b & 0x80): break
+			i += 1
+		if (r & 1): r = -r
+		return (r >> 1)
+
+	@staticmethod
+	def pack(v):
+		r = bytearray()
+		c, v = (v < 0), (abs(v) << 1)
+		if (c): v -= 1
+		while (True):
+			c |= (v & 0x7f)
+			v >>= 7
+			if (v): c |= 0x80
+			r.append(c)
+			if (not v): break
+			c = 0
+		return bytes(r)
+
 class hashabledict(dict):
 	__setitem__ = \
 	__delitem__ = \
@@ -1876,10 +1929,7 @@ def lstripcount(s, chars=None):
 	return (len(s)-len(ns), ns)
 
 def Sexcepthook(exctype, exc, tb):
-	def _read(f):
-		try: return open(f).readlines()
-		except OSError: return None
-	srcs = Sdict(_read)
+	srcs = Sdict(linecache.getlines)
 	res = list()
 
 	for frame, lineno in traceback.walk_tb(tb):
@@ -1891,11 +1941,11 @@ def Sexcepthook(exctype, exc, tb):
 		src = srcs[code.co_filename]
 		lines = set()
 
-		if (src is not None and lineno > 0):
+		if (src and lineno > 0):
 			loff = float('inf')
 			found_name = bool()
 
-			for i in range(lineno-1, 0, -1):#frame.f_lineno
+			for i in range(lineno-1, 0, -1): #frame.f_lineno
 				line = src[i]
 				if (line.isspace()): continue
 				if (i+1 == lineno):
@@ -1946,7 +1996,7 @@ def Sexcepthook(exctype, exc, tb):
 
 				v = None
 				for color, ns in ((93, frame.f_locals), (92, frame.f_globals)): #, (95, builtins.__dict__)):
-					try: r = S(repr(ns[i])).indent(first=False)
+					try: r = S(repr(ns[i])).indent(first=False).fit(32) # TODO
 					except KeyError: continue
 					except Exception as ex: r = f"<exception in {i}.__repr__(): {repr(ex)}>"
 					v = f"\033[{color}m{r}\033[0m"
@@ -1957,15 +2007,25 @@ def Sexcepthook(exctype, exc, tb):
 				if (v is not None): print(f"{' '*12}\033[94m{i}\033[0;2m: {v}")
 
 	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[2m{exctype.__name__}\033[0m")
+	elif (exctype is SyntaxError and exc.args):
+		try: line = highlight(exc.text)
+		except Exception: line = exc.text
+		print(f"\033[1;96m{exctype.__name__}\033[0m: {exc}\n{line.rstrip().expandtabs(1)}\n{' '*(exc.offset-1)}\033[95m^\033[0m")
 	else: print(f"\033[1;91m{exctype.__name__}\033[0m{': '*bool(str(exc))}{exc}")
 
 	if (exc.__cause__ is not None):
 		print(" \033[1m> This exception was caused by:\033[0m\n")
 		Sexcepthook(type(exc.__cause__), exc.__cause__, exc.__cause__.__traceback__)
+def _Sexcepthook_install():
+	if (sys.excepthook is not Sexcepthook):
+		if (not hasattr(sys, '_S_oldexcepthook')): sys._S_oldexcepthook = sys.excepthook
+		sys.excepthook = Sexcepthook
+Sexcepthook.install = _Sexcepthook_install
+if (sys.stderr.isatty()): Sexcepthook.install()
 
-if (sys.stderr.isatty()):
-	if (not hasattr(sys, '_oldexcepthook')): sys._oldexcepthook = sys.excepthook
-	sys.excepthook = Sexcepthook
+try: pygments
+except ModuleNotFoundError: pass
+else: import pygments.lexers, pygments.formatters
 
 #@dispatch
 def highlight(s: str): return pygments.highlight(s, pygments.lexers.PythonLexer(), pygments.formatters.TerminalFormatter(bg='dark'))
