@@ -1982,7 +1982,8 @@ def Sexcepthook(exctype, exc, tb):
 			found_name = bool()
 
 			for i in range(lineno-1, 0, -1): #frame.f_lineno
-				line = src[i]
+				try: line = src[i]
+				except IndexError: continue
 				if (line.isspace()): continue
 				if (i+1 == lineno):
 					try: line = highlight(line)
