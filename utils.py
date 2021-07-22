@@ -105,7 +105,6 @@ _imports = (
 	'aiofiles',
 	'argparse',
 	'attrdict',
-	'bintools',
 	'builtins',
 	'datetime',
 	'operator',
@@ -153,6 +152,7 @@ def install_all_imports():
 	finally: sys.argv = old_sysargv
 
 py_version = 'Python '+sys.version.split(maxsplit=1)[0]
+__repl__ = bool(getattr(sys, 'ps1', sys.flags.interactive))
 
 ### [replaced by Sexcepthook]
 #if (sys.stderr.isatty()):
@@ -533,8 +533,8 @@ def code_with(code, **kwargs):
 	return CodeType(*(kwargs.get(i, kwargs.get('co_'+i, getattr(code, 'co_'+i))) for i in ('argcount', 'kwonlyargcount', 'nlocals', 'stacksize', 'flags', 'code', 'consts', 'names', 'varnames', 'filename', 'name', 'firstlineno', 'lnotab', 'freevars', 'cellvars')))
 # TODO: func_with()
 
-def funcdecorator(df=None, /, *, suppresstb=True): # TODO: __dict__?
-	if (df is None): return lambda df: funcdecorator(df, suppresstb=suppresstb)
+def funcdecorator(df=None, /, *, signature=None, suppresstb=True): # TODO: __dict__?
+	if (df is None): return lambda df: funcdecorator(df, signature=signature, suppresstb=suppresstb)
 
 	@suppress_tb
 	def ndf(f, *args, **kwargs):
@@ -544,9 +544,18 @@ def funcdecorator(df=None, /, *, suppresstb=True): # TODO: __dict__?
 		if (nf is f): return f
 
 		if (suppresstb): nf = suppress_tb(nf) # TODO: option to disable
-		nf.__name__, nf.__qualname__, nf.__module__, nf.__doc__, nf.__annotations__, nf.__signature__ = \
-		 f.__name__,  f.__qualname__,  f.__module__,  f.__doc__, f.__annotations__, inspect.signature(f)
+
+		nf.__name__, nf.__qualname__, nf.__module__, nf.__doc__, nf.__annotations__ = \
+		 f.__name__,  f.__qualname__,  f.__module__,  f.__doc__,  f.__annotations__
+
+		if (signature is not None):
+			if (isinstance(signature, str)): nf.__text_signature__ = signature
+			else: nf.__signature__ = signature
+			inspect.signature(nf)  # validate
+		else: nf.__signature__ = inspect.signature(f)
+
 		nf.__code__ = code_with(nf.__code__, name=f"<decorated '{f.__code__.co_name}'>" if (not f.__code__.co_name.startswith('<decorated ')) else f.__code__.co_name)
+
 		for i in filter(lambda x: not x.startswith('__'), dir(f)):
 			setattr(nf, i, getattr(f, i))
 
@@ -555,8 +564,11 @@ def funcdecorator(df=None, /, *, suppresstb=True): # TODO: __dict__?
 	#dfsig, ndfsig = inspect.signature(df), inspect.signature(ndf)
 	#if (dfsig != ndfsig): raise ValueError(f"Function decorated with @funcdecorator should have signature '{format_inspect_signature(ndfsig)}' (got: '{format_inspect_signature(dfsig)}')") # TODO kwargs
 
-	ndf.__name__, ndf.__qualname__, ndf.__module__, ndf.__doc__, ndf.__code__ = \
-	 df.__name__,  df.__qualname__,  df.__module__,  df.__doc__, code_with(ndf.__code__, name=df.__code__.co_name)
+	ndf.__name__, ndf.__qualname__, ndf.__module__, ndf.__doc__ = \
+	 df.__name__,  df.__qualname__,  df.__module__,  df.__doc__
+
+	ndf.__code__ = code_with(ndf.__code__, name=df.__code__.co_name)
+
 	for i in filter(lambda x: not x.startswith('__'), dir(df)):
 		setattr(nff, i, getattr(df, i))
 
@@ -575,20 +587,23 @@ def dispatch_typecheck(o, t):
 _overloaded_functions = Sdict(dict)
 _overloaded_functions_retval = Sdict(dict)
 _overloaded_functions_docstings = Sdict(dict)
-def dispatch(f):
+def dispatch(f):  # TODO FIXME: f(*, x=3)
 	fname = f.__qualname__
 	if (getattr(f, '__signature__', None) == ...): del f.__signature__ # TODO FIXME ???
 	fsig = inspect.signature(f)
 	params_annotation = tuple((i[0], (None if (i[1].annotation is inspect._empty) else i[1].annotation, i[1].default is not inspect._empty, i[1].kind)) for i in fsig.parameters.items())
+
 	_overloaded_functions[fname][params_annotation] = f
 	_overloaded_functions_retval[fname][params_annotation] = type(fsig.return_annotation) if (fsig.return_annotation is None) else fsig.return_annotation
 	_overloaded_functions_docstings[fname][fsig] = f.__doc__
-	#dplog([(dict(i), '—'*40) for i in _overloaded_functions[fname]], width=60) # XXX
+
+	#dplog([(dict(i), '—'*40) for i in _overloaded_functions[fname]], width=60)
+
 	@suppress_tb
-	def overloaded(*args, **kwargs):
+	def overloaded(*args, **kwargs): # TODO FIXME: inspect.Signature.bind()?
 		args = list(args)
 		for k, v in _overloaded_functions[fname].items():
-			#dplog(k) # XXX
+			#dplog(k)
 			i = int()
 			no = True
 			for ii, a in enumerate(args):
@@ -615,8 +630,7 @@ def dispatch(f):
 			if (no): continue
 			if (not varkw and {i for i in kw if (not kw[i][1])}-pkw): continue
 
-			r = \
-				v(*args, **kwargs)
+			r = v(*args, **kwargs)
 			break
 		else:
 			if (() in _overloaded_functions[fname]): r = _overloaded_functions[fname][()](*args, **kwargs)
@@ -627,8 +641,16 @@ def dispatch(f):
 		if (retval is not inspect._empty and not isinstance(r, retval)):
 			raise DispatchError(f"Return value of type {type(r)} doesn't match return annotation of appropriate '{fname}' signature")
 		return r
-	overloaded.__name__, overloaded.__qualname__, overloaded.__module__, overloaded.__doc__, overloaded.__signature__, overloaded.__code__ = f"Overloaded {f.__name__}", f.__qualname__, f.__module__, (_overloaded_functions_docstings[fname][()]+'\n\n' if (() in _overloaded_functions_docstings[fname]) else '')+overloaded_format_signatures(fname, f.__qualname__), ..., code_with(overloaded.__code__, name=f"<overload handler of '{f.__qualname__}'>")
-	f.__name__, f.__code__ = f"Overloaded {f.__name__}", code_with(f.__code__, name=f"<overloaded '{f.__qualname__}' for {f.__name__}{format_inspect_signature(fsig)}>")
+
+	overloaded.__name__ = f"Overloaded {f.__name__}"
+	overloaded.__qualname__, overloaded.__module__ = f.__qualname__, f.__module__
+	overloaded.__doc__ = (_overloaded_functions_docstings[fname][()]+'\n\n' if (() in _overloaded_functions_docstings[fname]) else '') + overloaded_format_signatures(fname, f.__qualname__)
+	overloaded.__signature__ = ...
+	overloaded.__code__ = code_with(overloaded.__code__, name=f"<overload handler of '{f.__qualname__}'>")
+
+	f.__name__ = f"Overloaded {f.__name__}"
+	f.__code__ = code_with(f.__code__, name=f"<overloaded '{f.__qualname__}' for {f.__name__}{format_inspect_signature(fsig)}>")
+
 	return overloaded
 def dispatch_meta(f):
 	if (f.__doc__): _overloaded_functions_docstings[f.__qualname__][()] = f.__doc__
@@ -645,7 +667,7 @@ def format_inspect_signature(fsig):
 		elif (posonlysep): result.append('/'); posonlysep = False
 		if (p.kind == inspect.Parameter.VAR_POSITIONAL): kwonlysep = False
 		elif (p.kind == inspect.Parameter.KEYWORD_ONLY and kwonlysep): result.append('*'); kwonlysep = False
-		result.append(f"{'*' if (p.kind == inspect.Parameter.VAR_POSITIONAL) else '**' if (p.kind == inspect.Parameter.VAR_KEYWORD) else ''}{p.name}{f': {format_inspect_annotation(p.annotation)}' if (p.annotation is not inspect._empty) else ''}{f' = {p.default}' if (p.annotation is not inspect._empty and p.default is not inspect._empty) else f'={p.default}' if (p.default is not inspect._empty) else ''}")
+		result.append(f"{'*' if (p.kind == inspect.Parameter.VAR_POSITIONAL) else '**' if (p.kind == inspect.Parameter.VAR_KEYWORD) else ''}{p.name}{f': {format_inspect_annotation(p.annotation)}' if (p.annotation is not inspect._empty) else ''}{f' = {repr(p.default)}' if (p.annotation is not inspect._empty and p.default is not inspect._empty) else f'={repr(p.default)}' if (p.default is not inspect._empty) else ''}")
 
 	if (posonlysep): result.append('/')
 	rendered = ', '.join(result).join('()')
@@ -670,7 +692,7 @@ class CastError(TypeError): pass
 
 @funcdecorator
 def autocast(f):
-	""" Beware! leads to undefined behavior when used with @dispatch. """
+	""" Beware! leads to undefined behavior when used with `@dispatch'. """
 
 	return lambda *args, **kwargs: cast_call(f, *args, **kwargs)
 
@@ -696,7 +718,7 @@ def init_defaults(f):
 	#fsig = inspect.signature(f)
 	#return lambda *args, **kwargs: f(*args, **S(kwargs) & {k: v.annotation() for k, v in fsig.parameters.items() if (k not in kwargs and v.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY) and v.annotation is not inspect._empty)})
 
-	return lambda *args, **kwargs: f(*args, **S(kwargs) & {k: v() for k, v in f.__annotations__.items() if k not in kwargs})
+	return lambda *args, **kwargs: f(*args, **S(kwargs) & {k: v() for k, v in f.__annotations__.items() if k not in kwargs and not isinstance(v, str)})
 
 def each(it): return tuple(it)
 
@@ -824,7 +846,7 @@ def spreadargs(f, okwargs, *args, **akwargs):
 	return f(*args, **kwargs)
 
 def init(*names, **kwnames):
-	@funcdecorator
+	@funcdecorator(signature=inspect.Signature((*(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY) for name in names), *(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=default) for name, default in kwnames.items()))))
 	def decorator(f):
 		def decorated(self, *args, **kwargs):
 			missing = list()
@@ -854,7 +876,7 @@ logfile = None
 logoutput = sys.stderr
 loglock = queue.LifoQueue()
 _logged_utils_start = None
-def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, width=80, unlock=False, flush=True, nolog=False): # TODO: finally rewrite me as class pls
+def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, width=80, unlock=False, flush=True, nolog=False, nofile=False): # TODO: finally rewrite me as class pls
 	""" Log anything. Print (formatted with datetime) to stderr and logfile (if set). Should be compatible with builtins.print().
 	Parameters:
 		[l]: level, must be >= global loglevel to print to stderr rather than only to logfile (or /dev/null).
@@ -867,7 +889,9 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 		format: if true, apply pformat() to args.
 		width: specify output line width for wrapping, autodetect from stderr if not specified.
 		unlock: if true, release all previously holded («locked») log messages.
+		flush: if true, flush logfile if written to it.
 		nolog: if true, force suppress printing to stderr.
+		nofile: if true, force suppress printing to logfile.
 	"""
 	global loglock, _logged_utils_start
 	if (isinstance(_logged_utils_start, tuple)): _logged_utils_start, _logstateargs = True, _logged_utils_start; logstart('Utils'); logstate(*_logstateargs)
@@ -878,7 +902,7 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	x = 'plog():\n'*bool(format and not raw)+sep.join(map((lambda x: pformat(x, width=width)) if (format) else str, x))
 	clearstr = noesc.sub('', str(x))
 	if (tm is None): tm = time.localtime()
-	if (not unlock and not loglock.empty()): loglock.put(((_l, *_x), dict(sep=sep, end=end, raw=raw, tm=tm, nolog=nolog))); return clearstr
+	if (not unlock and not loglock.empty()): loglock.put(((_l, *_x), dict(sep=sep, end=end, raw=raw, tm=tm, nolog=nolog, nofile=nofile))); return clearstr
 	try: lc = logcolor[l]
 	except (TypeError, IndexError): lc = ''
 	if (ll is None): ll = f'[\033[1m{lc}LV{l}\033[0;96m]' if (l is not None) else ''
@@ -890,10 +914,10 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 			ul.append(i)
 		for i in ul[::-1]:
 			log(*i[0], **i[1])
-	if (logfile):
-		if (not nolog): logfile.write(logstr)
+	if (logfile and not nofile):
+		logfile.write(logstr)
 		if (flush): logfile.flush()
-	if ((l or 0) <= loglevel): logoutput.write(logstr); logoutput.flush()
+	if (not nolog and (l or 0) <= loglevel): logoutput.write(logstr); logoutput.flush()
 	return clearstr
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
 def _dlog(*args, **kwargs): parseargs(kwargs, ll='\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m', tm=''); return log(*args, **kwargs)
@@ -905,7 +929,7 @@ def logstart(x):
 	""" from utils import *; logstart(name) """
 	global _logged_utils_start
 	if (_logged_utils_start is None): _logged_utils_start = False; return
-	log(x+'\033[0m...', end=' ', nolog=(x == 'Utils'))
+	log(x+'\033[0m...', end=' ') #, nolog=(x == 'Utils'))
 	locklog()
 def logstate(state, x=''):
 	global _logged_utils_start
@@ -1400,15 +1424,17 @@ def singleton(C: type): C.__new__ = cachedfunction(C.__new__); return C()
 def singleton(*args, **kwargs): return lambda C: C(*args, **kwargs)
 
 class lc:
-	def __init__(self, lc):
-		self.lc = lc
+	__slots__ = ('category', 'lc', 'pl')
+
+	def __init__(self, category, lc=None):
+		self.category, self.lc = (category, lc) if (lc is not None) else (locale.LC_ALL, lc)
 
 	def __enter__(self):
-		self.pl = locale.setlocale(locale.LC_ALL)
-		locale.setlocale(locale.LC_ALL, self.lc)
+		self.pl = locale.setlocale(self.category)
+		locale.setlocale(self.category, self.lc)
 
 	def __exit__(self, type, value, tb):
-		locale.setlocale(locale.LC_ALL, self.pl)
+		locale.setlocale(self.category, self.pl)
 
 class ll:
 	def __init__(self, ll):
@@ -1932,6 +1958,16 @@ def Sexcepthook(exctype, exc, tb):
 	srcs = Sdict(linecache.getlines)
 	res = list()
 
+	if (__repl__):
+		if (exctype is SyntaxError and exc.text and exc.text.strip()[-1:] == '?'):
+			topic = exc.text.strip()[:-1]
+			try: help(eval(topic))
+			except Exception:
+				try: help(topic)
+				except Exception: pass
+				else: return
+			else: return
+
 	for frame, lineno in traceback.walk_tb(tb):
 		code = frame.f_code
 		if (os.path.basename(code.co_filename) == 'runpy.py' and os.path.dirname(code.co_filename) in sys.path): continue
@@ -2010,12 +2046,27 @@ def Sexcepthook(exctype, exc, tb):
 	elif (exctype is SyntaxError and exc.args):
 		try: line = highlight(exc.text)
 		except Exception: line = exc.text
-		print(f"\033[1;96m{exctype.__name__}\033[0m: {exc}\n{line.rstrip().expandtabs(1)}\n{' '*(exc.offset-1)}\033[95m^\033[0m")
+		print(f"\033[1;96m{exctype.__name__}\033[0m: {exc}")
+		if (line is not None): print(f"{line.rstrip().expandtabs(1)}\n{' '*(exc.offset-1)}\033[95m^\033[0m")
 	else: print(f"\033[1;91m{exctype.__name__}\033[0m{': '*bool(str(exc))}{exc}")
 
 	if (exc.__cause__ is not None):
 		print(" \033[1m> This exception was caused by:\033[0m\n")
 		Sexcepthook(type(exc.__cause__), exc.__cause__, exc.__cause__.__traceback__)
+
+	if (__repl__):
+		if (exctype is NameError and exc.args and
+		    (m := re.fullmatch(r"name '(.*)' is not defined", exc.args[0])) is not None and
+		    (module := importlib.util.find_spec(m[1])) is not None):
+			print(f"\n\033[96m>>> \033[2mimport \033[1m{module.name}\033[0m")
+			frame.f_globals[m[1]] = module.loader.load_module()
+			#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
+		elif (exctype is AttributeError and exc.args and
+		      (m := re.fullmatch(r"module '(.*)' has no attribute '(.*)'", exc.args[0])) is not None and
+		      (module := importlib.util.find_spec(m[1]+'.'+m[2])) is not None):
+			print(f"\n\033[96m>>> \033[2mimport \033[1m{module.name}\033[0m")
+			setattr(frame.f_globals[m[1]], m[2], module.loader.load_module())
+			#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
 def _Sexcepthook_install():
 	if (sys.excepthook is not Sexcepthook):
 		if (not hasattr(sys, '_S_oldexcepthook')): sys._S_oldexcepthook = sys.excepthook
