@@ -2035,7 +2035,7 @@ def Sexcepthook(exctype, exc, tb):
 				for color, ns in ((93, frame.f_locals), (92, frame.f_globals)): #, (95, builtins.__dict__)):
 					try: r = S(repr(ns[i])).indent(first=False).fit(32) # TODO
 					except KeyError: continue
-					except Exception as ex: r = f"<exception in {i}.__repr__(): {repr(ex)}>"
+					except Exception as ex: color, r = 91, f"<exception in {i}.__repr__(): {repr(ex)}>"
 					v = f"\033[{color}m{r}\033[0m"
 					break
 				#else:
