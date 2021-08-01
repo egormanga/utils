@@ -1985,16 +1985,15 @@ def Sexcepthook(exctype, exc, tb):
 				try: line = src[i]
 				except IndexError: continue
 				if (line.isspace()): continue
-				if (i+1 == lineno):
-					try: line = highlight(line)
-					except Exception: pass
 				cloff = lstripcount(line)[0]
 				if (cloff < loff or i+1 == lineno):
 					loff = cloff
+					try: hline = highlight(line)
+					except Exception: hline = line
 					if (not found_name and re.fullmatch(fr"\s*(?:def|class)\s+{name}\b.*(:|\(|\\)\s*(?:#.*)?", line)):
-						line = re.sub(fr"((?:def|class)\s+)({name})\b", '\\1\033[0;93m\\2\033[0;2m', line, 1)
+						hline = re.sub(fr"((?:def|class)\s+)({name})\b", '\\1\033[0;93m\\2\033[0;2m', hline, 1)
 						found_name = True
-					lines.add((i+1, line))
+					lines.add((i+1, line, hline))
 
 			#for i in range(*sorted((frame.f_lineno-1, lineno))):
 			#	lines.add((i+1, src[i]))
@@ -2003,7 +2002,7 @@ def Sexcepthook(exctype, exc, tb):
 
 	if (res):
 		print("\033[91mTraceback\033[0m \033[2m(most recent call last)\033[0m:")
-		maxlnowidth = max((max(len(str(ln)) for ln, line in lines) for file, name, lineno, lines, frame in res if lines), default=0)
+		maxlnowidth = max((max(len(str(ln)) for ln, line, hline in lines) for file, name, lineno, lines, frame in res if lines), default=0)
 
 	for file, name, lineno, lines, frame in res:
 		if (os.path.commonpath((os.path.abspath(file), os.getcwd())) != '/'): file = os.path.relpath(file)
@@ -2012,7 +2011,9 @@ def Sexcepthook(exctype, exc, tb):
 		if (lines or lineno > 0): print('  File '+terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(file)}\033[0m")+f", in \033[93m{name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}")
 		else: print('  \033[2mFile '+terminal_link(link, f"\033[36m{filepath}\033[96m{os.path.basename(file)}\033[0;2m")+f", in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[0m")
 
-		for ii, (ln, line) in enumerate(lines):
+		mlw = int()
+		for ii, (ln, line, hline) in enumerate(lines):
+			mlw = max(mlw, len(line))
 			print(end=' '*(8+(maxlnowidth-len(str(ln)))))
 			#if (ln == lineno): print(end='\033[1m')
 			if (ii != len(lines)-1): print(end='\033[2m')
@@ -2020,7 +2021,7 @@ def Sexcepthook(exctype, exc, tb):
 			print('\033[2m│', end='\033[0m ')
 			if (ln == lineno): print(end='\033[1m')
 			if (ii != len(lines)-1): print(end='\033[2m')
-			print(line.rstrip().expandtabs(4), end='\033[0m\n') #'\033[0m'+ # XXX?
+			print(hline.rstrip().expandtabs(4), end='\033[0m\n') #'\033[0m'+ # XXX?
 
 		if (lines):
 			#try: c = compile(lines[-1][1].strip(), '', 'exec')
@@ -2032,8 +2033,8 @@ def Sexcepthook(exctype, exc, tb):
 				if (i not in words): continue
 
 				v = None
-				for color, ns in ((93, frame.f_locals), (92, frame.f_globals)): #, (95, builtins.__dict__)):
-					try: r = S(repr(ns[i])).indent(first=False).fit(32) # TODO
+				for color, ns in ((93, frame.f_locals), (92, frame.f_globals), (95, builtins.__dict__)):
+					try: r = S(repr(ns[i])).indent(first=False).fit(mlw)
 					except KeyError: continue
 					except Exception as ex: color, r = 91, f"<exception in {i}.__repr__(): {repr(ex)}>"
 					v = f"\033[{color}m{r}\033[0m"
