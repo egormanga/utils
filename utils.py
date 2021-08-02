@@ -2001,7 +2001,7 @@ def Sexcepthook(exctype, exc, tb):
 		res.append((file, name, lineno, sorted(lines), frame))
 
 	if (res):
-		print("\033[91mTraceback\033[0m \033[2m(most recent call last)\033[0m:")
+		print("\033[0;91mTraceback\033[0m \033[2m(most recent call last)\033[0m:")
 		maxlnowidth = max((max(len(str(ln)) for ln, line, hline in lines) for file, name, lineno, lines, frame in res if lines), default=0)
 
 	for file, name, lineno, lines, frame in res:
@@ -2048,29 +2048,29 @@ def Sexcepthook(exctype, exc, tb):
 
 				if (v is not None): print(f"{' '*12}\033[94m{i}\033[0;2m: {v}")
 
-	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[2m{exctype.__name__}\033[0m")
+	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[0;2m{exctype.__name__}\033[0m")
 	elif (exctype is SyntaxError and exc.args):
 		try: line = highlight(exc.text)
 		except Exception: line = exc.text
-		print(f"\033[1;96m{exctype.__name__}\033[0m: {exc}")
+		print(f"\033[0;1;96m{exctype.__name__}\033[0m: {exc}")
 		if (line is not None): print(f"{line.rstrip().expandtabs(1)}\n{' '*(exc.offset-1)}\033[95m^\033[0m")
-	else: print(f"\033[1;91m{exctype.__name__}\033[0m{': '*bool(str(exc))}{exc}")
+	else: print(f"\033[0;1;91m{exctype.__name__}\033[0m{': '*bool(str(exc))}{exc}")
 
 	if (exc.__cause__ is not None):
-		print(" \033[1m> This exception was caused by:\033[0m\n")
+		print(" \033[0;1m> This exception was caused by:\033[0m\n")
 		Sexcepthook(type(exc.__cause__), exc.__cause__, exc.__cause__.__traceback__)
 
 	if (__repl__):
 		if (exctype is NameError and exc.args and
 		    (m := re.fullmatch(r"name '(.*)' is not defined", exc.args[0])) is not None and
 		    (module := importlib.util.find_spec(m[1])) is not None):
-			print(f"\n\033[96m>>> \033[2mimport \033[1m{module.name}\033[0m")
+			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[0m")
 			frame.f_globals[m[1]] = module.loader.load_module()
 			#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
 		elif (exctype is AttributeError and exc.args and
 		      (m := re.fullmatch(r"module '(.*)' has no attribute '(.*)'", exc.args[0])) is not None and
 		      (module := importlib.util.find_spec(m[1]+'.'+m[2])) is not None):
-			print(f"\n\033[96m>>> \033[2mimport \033[1m{module.name}\033[0m")
+			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[0m")
 			setattr(frame.f_globals[m[1]], m[2], module.loader.load_module())
 			#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
 def _Sexcepthook_install():
