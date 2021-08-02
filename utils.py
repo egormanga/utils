@@ -2028,15 +2028,19 @@ def Sexcepthook(exctype, exc, tb):
 			#except SyntaxError:
 			c = frame.f_code
 
-			words = re.split(r'\W', lines[-1][1])
-			for i in sorted({*c.co_cellvars, *c.co_freevars, *c.co_names, *c.co_varnames}, key=lambda x: words.index(x) if x in words else 0):
-				if (i not in words): continue
+			words = list()
+			for i in regex.findall(r'[^.]\b(\w+|[\w.]+)\b', lines[-1][1], overlapped=True):
+				if (i.startswith('.')): words[-1] += i
+				else: words.append(i)
 
+			for i in S(words).uniquize():
 				v = None
 				for color, ns in ((93, frame.f_locals), (92, frame.f_globals), (95, builtins.__dict__)):
-					try: r = S(repr(ns[i])).indent(first=False).fit(mlw)
-					except KeyError: continue
+					try: r = S(repr(operator.attrgetter(i)(S(ns)))).indent(first=False).fit(mlw)
+					except (KeyError, AttributeError): continue
 					except Exception as ex: color, r = 91, f"<exception in {i}.__repr__(): {repr(ex)}>"
+					else:
+						if (r == i): continue
 					v = f"\033[{color}m{r}\033[0m"
 					break
 				#else:
