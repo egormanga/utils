@@ -2044,7 +2044,7 @@ def Sexcepthook(exctype, exc, tb):
 					v = f"\033[{color}m{r}\033[0m"
 					break
 				else:
-					if (not keyword.iskeyword(i) and i not in builtins.__dict__): v = '\033[2m<not found>\033[0m'
+					if (i.isidentifier() and not keyword.iskeyword(i) and i not in builtins.__dict__): v = '\033[2m<not found>\033[0m'
 
 				if (v is not None): print(f"{' '*12}\033[94m{i}\033[0;2m: {v}")
 
