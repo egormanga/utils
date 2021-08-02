@@ -2004,24 +2004,29 @@ def Sexcepthook(exctype, exc, tb):
 		print("\033[0;91mTraceback\033[0m \033[2m(most recent call last)\033[0m:")
 		maxlnowidth = max((max(len(str(ln)) for ln, line, hline in lines) for file, name, lineno, lines, frame in res if lines), default=0)
 
+	last = None
 	for file, name, lineno, lines, frame in res:
 		if (os.path.commonpath((os.path.abspath(file), os.getcwd())) != '/'): file = os.path.relpath(file)
-		filepath = (os.path.dirname(file)+os.path.sep if (os.path.dirname(file)) else '')
-		link = f'file://{socket.gethostname()}'+os.path.realpath(file) if (os.path.exists(file)) else file
-		if (lines or lineno > 0): print('  File '+terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(file)}\033[0m")+f", in \033[93m{name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}")
-		else: print('  \033[2mFile '+terminal_link(link, f"\033[36m{filepath}\033[96m{os.path.basename(file)}\033[0;2m")+f", in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[0m")
 
-		mlw = int()
-		for ii, (ln, line, hline) in enumerate(lines):
-			mlw = max(mlw, len(line))
-			print(end=' '*(8+(maxlnowidth-len(str(ln)))))
-			#if (ln == lineno): print(end='\033[1m')
-			if (ii != len(lines)-1): print(end='\033[2m')
-			print(ln, end='\033[0m ')
-			print('\033[2m│', end='\033[0m ')
-			if (ln == lineno): print(end='\033[1m')
-			if (ii != len(lines)-1): print(end='\033[2m')
-			print(hline.rstrip().expandtabs(4), end='\033[0m\n') #'\033[0m'+ # XXX?
+		if ((file, lineno) != last):
+			filepath = (os.path.dirname(file)+os.path.sep if (os.path.dirname(file)) else '')
+			link = f'file://{socket.gethostname()}'+os.path.realpath(file) if (os.path.exists(file)) else file
+			if (lines or lineno > 0): print('  File '+terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(file)}\033[0m")+f", in \033[93m{name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}")
+			else: print('  \033[2mFile '+terminal_link(link, f"\033[36m{filepath}\033[96m{os.path.basename(file)}\033[0;2m")+f", in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[0m")
+
+			mlw = int()
+			for ii, (ln, line, hline) in enumerate(lines):
+				mlw = max(mlw, len(line))
+				print(end=' '*(8+(maxlnowidth-len(str(ln)))))
+				#if (ln == lineno): print(end='\033[1m')
+				if (ii != len(lines)-1): print(end='\033[2m')
+				print(ln, end='\033[0m ')
+				print('\033[2m│', end='\033[0m ')
+				if (ln == lineno): print(end='\033[1m')
+				if (ii != len(lines)-1): print(end='\033[2m')
+				print(hline.rstrip().expandtabs(4), end='\033[0m\n') #'\033[0m'+ # XXX?
+		else: print(f"    \033[2m...\033[0min \033[93m{name}\033[0m{':'*bool(lines)}")
+		last = (file, lineno)
 
 		if (lines):
 			#try: c = compile(lines[-1][1].strip(), '', 'exec')
