@@ -62,6 +62,7 @@ _imports = (
 	'math',
 	'stat',
 	'time',
+	'toml',
 	'uuid',
 	'yaml',
 	'zlib',
@@ -73,6 +74,7 @@ _imports = (
 	'atexit',
 	'base64',
 	'bidict',
+	'bisect',
 	'codeop',
 	'ctypes',
 	'getkey',
@@ -131,6 +133,7 @@ _imports = (
 	'collections',
 	'rlcompleter',
 	'unicodedata',
+	'configparser',
 	'aioprocessing',
 	'better_exchook',
 	'typing_inspect',
@@ -139,6 +142,7 @@ _imports = (
 )
 for i in _imports: Simport(*i.split()[::2])
 del i, Simport # TODO FIXME? (inspect.stack() is too slow)
+globals().update(sys.modules)  # TODO: remove from list above?
 
 def install_all_imports():
 	r = list()
@@ -208,16 +212,17 @@ def suppress_tb(f): f.__code__ = code_with(f.__code__, firstlineno=0, lnotab=b''
 
 def terminal_link(link, text=None): return f"\033]8;;{noesc.sub('', link)}\033\\{text if (text is not None) else link}\033]8;;\033\\"
 
-def S(x=None):
+def S(x=None, *, ni_ok=False):
 	""" Convert `x' to an instance of corresponding S-type. """
 	ex = None
-	try: return Stuple(x) if (isinstance(x, generator)) else eval('S'+type(x).__name__)(x) if (not isinstance(x, Stype)) else x
+	try: return Stuple(x) if (isinstance(x, generator)) else eval('S'+type(x).__name__)(x) if (not isinstance(x, S_type)) else x
 	except NameError: ex = True
+	if (ni_ok): return x
 	if (ex): raise NotImplementedError("S%s" % type(x).__name__)
 
-class Stype: pass
+class S_type: pass
 
-class Sdict(Stype, collections.defaultdict):
+class Sdict(S_type, collections.defaultdict):
 	def __init__(self, *args, **kwargs):
 		args = list(args)
 		if (not args or isiterable(args[0])): args.insert(0, None)
@@ -226,8 +231,9 @@ class Sdict(Stype, collections.defaultdict):
 	__repr__ = dict.__repr__
 
 	def __getattr__(self, x):
-		try: return self[x]
+		try: r = self[x]
 		except KeyError: pass
+		else: return Sdict(r) if (isinstance(r, dict)) else r
 		raise AttributeError(x)
 
 	def __setattr__(self, x, v):
@@ -306,7 +312,7 @@ class Sdict(Stype, collections.defaultdict):
 		return self
 Sdefaultdict = Sdict
 
-class Slist(Stype, list): # TODO: fix everywhere: type(x) == y --> isinstance(x, y)
+class Slist(S_type, list): # TODO: fix everywhere: type(x) == y --> isinstance(x, y)
 	def __matmul__(self, item):
 		if (type(item) == dict): return Slist(i for i in self if all(v(i.get(k)) if (callable(v)) else i.get(k) in v for k, v in item.items()))
 		r = Slist(Slist((i.get(j) if (hasattr(i, 'get')) else i[j]) for j in item) for i in self)
@@ -364,7 +370,7 @@ class Slist(Stype, list): # TODO: fix everywhere: type(x) == y --> isinstance(x,
 
 class Stuple(Slist): pass # TODO
 
-class Sint(Stype, int):
+class Sint(S_type, int):
 	def __len__(self):
 		return Sint(math.log10(abs(self) or 1)+1)
 
@@ -377,7 +383,7 @@ class Sint(Stype, int):
 	def pm(self):
 		return f"+{self}" if (self > 0) else str(self)
 
-class Sstr(Stype, str):
+class Sstr(S_type, str):
 	_subtrans = str.maketrans({
 		'0': '₀',
 		'1': '₁',
@@ -1011,7 +1017,10 @@ clear = _clear()
 class DB:
 	""" All-in-one lightweight database class. """
 
+	__slots__ = ('file', 'fields', 'serializer', 'lock', 'backup', 'sensitive', 'nolog')
+
 	def __init__(self, file=None, serializer=pickle):
+		self.lock = threading.Lock()
 		self.setfile(file)
 		self.setserializer(serializer)
 		self.fields = dict()
@@ -1021,71 +1030,97 @@ class DB:
 
 	@dispatch
 	def setfile(self, file: NoneType):
-		self.file = None
+		with self.lock:
+			self.file = None
+
 		return False
 
 	@dispatch
 	def setfile(self, file: str):
 		if ('/' not in file): file = os.path.join(os.path.dirname(os.path.realpath(sys.argv[0])), file)
 		file = os.path.expanduser(file)
-		try: self.file = open(file, 'r+b')
-		except FileNotFoundError: self.file = open(file, 'w+b')
-		if (self.sensitive): os.fchmod(self.file.fileno(), 0o600)
+
+		with self.lock:
+			try: self.file = open(file, 'r+b')
+			except FileNotFoundError: self.file = open(file, 'w+b')
+			if (self.sensitive): os.fchmod(self.file.fileno(), 0o600)
+
 		return True
 
 	def setnolog(self, nolog=True):
-		self.nolog = bool(nolog)
+		with self.lock:
+			self.nolog = bool(nolog)
 
 	def setbackup(self, backup):
-		self.backup = bool(backup)
+		with self.lock:
+			self.backup = bool(backup)
 
 	def setsensitive(self, sensitive=True):
-		if (not sensitive and self.sensitive and self.file is not None):
-			umask = os.umask(0); os.umask(umask)
-			os.fchmod(self.file.fileno(), 0o666 ^ umask)
-		self.sensitive = bool(sensitive)
+		with self.lock:
+			if (not sensitive and self.sensitive and self.file is not None):
+				umask = os.umask(0); os.umask(umask)
+				os.fchmod(self.file.fileno(), 0o666 ^ umask)
+			self.sensitive = bool(sensitive)
 
 	@dispatch
 	def setserializer(self, serializer: module):
-		self.serializer = serializer
+		with self.lock:
+			self.serializer = serializer
 
 	def register(self, *fields):
-		globals = inspect.stack()[1][0].f_globals
-		for field in fields: self.fields[field] = globals
+		with self.lock:
+			globals = inspect.stack()[1][0].f_globals
+			for field in fields:
+				self.fields[field] = (globals, globals['__annotations__'][field], globals.get(field)) if (field in globals.get('__annotations__', ())) else globals
 
 	def load(self, nolog=None):
-		nolog = (self.nolog if (nolog is None) else nolog)
-		if (not self.file): return
-		if (not nolog): logstart('Loading database')
-		db = dict()
-		try: db = self.serializer.load(self.file);
-		except EOFError:
-			if (not nolog): logwarn('database is empty')
-		else:
-			if (not nolog): logok()
-		self.file.seek(0)
-		for field in self.fields:
-			if (field in db): self.fields[field][field] = db.get(field)
-			elif (not nolog): log(1, f"Not in DB: {field}")
+		with self.lock:
+			nolog = (self.nolog if (nolog is None) else nolog)
+
+			if (not self.file): return
+			if (not nolog): logstart('Loading database')
+
+			db = dict()
+
+			try: db = self.serializer.load(self.file)
+			except EOFError:
+				if (not nolog): logwarn('database is empty')
+			else:
+				if (not nolog): logok()
+
+			self.file.seek(0)
+
+			for field, globals in self.fields.items():
+				if (isinstance(globals, tuple)): globals, annotation, default = globals
+				try: value = db[field]
+				except KeyError:
+					if (not nolog): log(1, f"Not in DB: {field}")
+				else: globals[field] = value
+
 		return db
 
 	def save(self, db={}, backup=None, nolog=None):
-		nolog = (self.nolog if (nolog is None) else nolog)
-		backup = (self.backup if (backup is None) else backup)
-		if (not self.file): return
-		if (not nolog): logstart('Saving database')
-		if (backup):
-			try: os.mkdir('backup')
-			except FileExistsError: pass
-			try: shutil.copyfile(self.file.name, f"backup/{self.file.name if (hasattr(self.file, 'name')) else ''}_{int(time.time())}.db")
-			except OSError: pass
-		try: self.serializer.dump(db or {field: self.fields[field][field] for field in self.fields}, self.file)
-		except Exception as ex:
-			if (not nolog): logex(ex)
-		else:
-			if (not nolog): logok()
-		self.file.truncate()
-		self.file.seek(0)
+		with self.lock:
+			nolog = (self.nolog if (nolog is None) else nolog)
+			backup = (self.backup if (backup is None) else backup)
+
+			if (not self.file): return
+			if (not nolog): logstart('Saving database')
+
+			if (backup):
+				try: os.mkdir('backup')
+				except FileExistsError: pass
+				try: shutil.copyfile(self.file.name, f"backup/{self.file.name if (hasattr(self.file, 'name')) else ''}_{int(time.time())}.db")
+				except OSError: pass
+
+			try: self.serializer.dump(db or {field: globals[0][field] if (isinstance(globals, tuple)) else globals[field] for field, globals in self.fields.items() if not isinstance(globals, tuple) and field in globals or isinstance(globals, tuple) and field in globals[0] and globals[2] is not None and globals[0][field] != globals[2]}, self.file)
+			except Exception as ex:
+				if (not nolog): logex(ex)
+			else:
+				if (not nolog): logok()
+
+			self.file.truncate()
+			self.file.seek(0)
 db = DB()
 
 def progress(cv, mv, *, pv="▏▎▍▌▋▊▉█", fill='░', border='│', prefix='', fixed=True, print=True, **kwargs): # TODO: optimize
@@ -1426,8 +1461,17 @@ def singleton(*args, **kwargs): return lambda C: C(*args, **kwargs)
 class lc:
 	__slots__ = ('category', 'lc', 'pl')
 
-	def __init__(self, category, lc=None):
-		self.category, self.lc = (category, lc) if (lc is not None) else (locale.LC_ALL, lc)
+	@dispatch
+	def __init__(self):
+		self.__init__(locale.LC_ALL)
+
+	@dispatch
+	def __init__(self, lc: str):
+		self.__init__(locale.LC_ALL, lc)
+
+	@dispatch
+	def __init__(self, category: int = locale.LC_ALL, lc: str = None):
+		self.category, self.lc = category, (lc if (lc is not None) else '.'.join(locale.getlocale()))
 
 	def __enter__(self):
 		self.pl = locale.setlocale(self.category)
@@ -1654,12 +1698,22 @@ class MetaBuilder(type):
 	def __prepare__(name, bases):
 		return type('', (dict,), {'__getitem__': lambda self, x: MetaBuilder.Var(x[2:]) if (x.startswith('a_') and x[2:]) else dict.__getitem__(self, x)})()
 
+class SlotsOnlyMeta(type):
+	def __new__(metacls, name, bases, classdict):
+		annotations = classdict.get('__annotations__', {})
+		classdict['__slots__'] = tuple(annotations.keys())
+		return super().__new__(metacls, name, bases, classdict)
+class SlotsOnly(metaclass=SlotsOnlyMeta): pass
+class ABCSlotsOnlyMeta(SlotsOnlyMeta, abc.ABCMeta): pass
+class ABCSlotsOnly(metaclass=ABCSlotsOnlyMeta): pass
+
 class SlotsMeta(type):
 	def __new__(metacls, name, bases, classdict):
 		annotations = classdict.get('__annotations__', {})
 		classdict['__slots__'] = tuple(annotations.keys())
 		cls = super().__new__(metacls, name, bases, classdict)
 		if (not annotations): return cls
+
 		__init_o__ = cls.__init__
 		@suppress_tb
 		def __init__(self, *args, **kwargs):
@@ -1668,11 +1722,13 @@ class SlotsMeta(type):
 				try: object.__getattribute__(self, k)
 				except AttributeError: object.__setattr__(self, k, v() if (isinstance(v, (type, function, method))) else v)
 			__init_o__(self, *args, **kwargs)
+
 		cls.__init__ = __init__
 		#cls.__metaclass__ = metacls  # inheritance?
+
 		return cls
-class ABCSlotsMeta(SlotsMeta, abc.ABCMeta): pass
 class Slots(metaclass=SlotsMeta): pass
+class ABCSlotsMeta(SlotsMeta, abc.ABCMeta): pass
 class ABCSlots(metaclass=ABCSlotsMeta): pass
 
 class IndexedMeta(type):
@@ -2035,7 +2091,7 @@ def Sexcepthook(exctype, exc, tb):
 
 			words = list()
 			for i in regex.findall(r'[^.]\b(\w+|[\w.]+)\b', lines[-1][1], overlapped=True):
-				if (i.startswith('.')): words[-1] += i
+				if (words and i.startswith('.')): words[-1] += i
 				else: words.append(i)
 
 			for i in S(words).uniquize():
@@ -2154,7 +2210,7 @@ class TEST(BaseException): pass
 class NonLoggingException(Exception): pass
 
 def exit(c=None, code=None, raw=False, nolog=False):
-	sys.stderr.write('\r\033[K')
+	if (not nolog): sys.stderr.write('\r\033[K')
 	unlocklog()
 	db.save(nolog=True)
 	if (not nolog): log(f'{c}' if (raw) else f'Exit: {c}' if (c and type(c) == str or hasattr(c, 'args') and c.args) else 'Exit.')
@@ -2163,7 +2219,9 @@ def exit(c=None, code=None, raw=False, nolog=False):
 	finally:
 		if (not nolog): log(raw=True)
 
-def setonsignals(f=exit): signal.signal(signal.SIGINT, f); signal.signal(signal.SIGTERM, f)
+def setonsignals(f=exit):
+	#signal.signal(signal.SIGINT, f)
+	signal.signal(signal.SIGTERM, f)
 
 logstart('Utils')
 if (__name__ == '__main__'):
