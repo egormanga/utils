@@ -881,6 +881,7 @@ noesc = re.compile(r'\033 (?: \] \w* ; \w* ; [^\033]* (?: \033\\ | \x07) | \[? [
 logfile = None
 logoutput = sys.stderr
 loglock = queue.LifoQueue()
+_logged_start = dict()
 _logged_utils_start = None
 def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, width=80, unlock=False, flush=True, nolog=False, nofile=False): # TODO: finally rewrite me as class pls
 	""" Log anything. Print (formatted with datetime) to stderr and logfile (if set). Should be compatible with builtins.print().
@@ -932,9 +933,12 @@ def dplog(*args, **kwargs): parseargs(kwargs, format=True, sep='\n'); return _dl
 def rlog(*args, **kwargs): parseargs(kwargs, raw=True); return log(*args, **kwargs)
 def logdumb(**kwargs): return log(raw=True, end='', **kwargs)
 def logstart(x):
-	""" from utils import *; logstart(name) """
-	global _logged_utils_start
+	""" from utils[.nolog] import *; logstart(name) """
+	global _logged_start, _logged_utils_start
 	if (_logged_utils_start is None): _logged_utils_start = False; return
+	#if ((name := inspect.stack()[1][0].f_globals.get('__name__')) is not None):
+	if (_logged_start.get(x) is True): return
+	_logged_start[x] = True
 	log(x+'\033[0m...', end=' ') #, nolog=(x == 'Utils'))
 	locklog()
 def logstate(state, x=''):
@@ -1332,7 +1336,7 @@ class NodesTree:
 		return '\n'.join(self.format_node(self.tree, **fmtkwargs))
 
 	@classmethod
-	def format_node(cls, node, indent=2, color=False, usenodechars=False, root=False):
+	def format_node(cls, node, indent=2, color=False, usenodechars=False, *, root=False):
 		chars = cls.colorchars if (color) else cls.chars
 		nodechar = chars[6] if (usenodechars) else chars[3]
 		for ii, (k, v) in enumerate(node.items()):
@@ -1351,9 +1355,7 @@ class TaskTree(NodesTree):
 
 	def __init__(self, x, **kwargs):
 		self.tree = x
-		self.l = int()
-		l = tuple(self.format_node(self.tree, root=True, **kwargs))
-		self.l = len(l)
+		self.l = len(tuple(self.format_node(self.tree, root=True, **kwargs)))
 
 	def __del__(self):
 		sys.stderr.write('\n'*self.l)
@@ -1365,7 +1367,7 @@ class TaskTree(NodesTree):
 		sys.stderr.write(f"\r\033[{self.l-1}A")
 		sys.stderr.flush()
 
-	def format_node(self, node, indent=2, color=False, root=False):
+	def format_node(self, node, indent=2, color=False, *, root=False):
 		chars = self.colorchars if (color) else self.chars
 		for ii, t in enumerate(node):
 			yield (((chars[0] if (len(node) > 1) else chars[5]) if (root and ii == 0) else chars[1] if (ii < len(node)-1) else chars[2])+chars[3]*(indent-1)+(chars[6] if (t.state) else chars[3]), t)
@@ -1466,11 +1468,11 @@ class lc:
 		self.__init__(locale.LC_ALL)
 
 	@dispatch
-	def __init__(self, lc: str):
+	def __init__(self, lc: (str, typing.Iterable, NoneType)):
 		self.__init__(locale.LC_ALL, lc)
 
 	@dispatch
-	def __init__(self, category: int = locale.LC_ALL, lc: str = None):
+	def __init__(self, category: int = locale.LC_ALL, lc: (str, typing.Iterable, NoneType) = None):
 		self.category, self.lc = category, (lc if (lc is not None) else '.'.join(locale.getlocale()))
 
 	def __enter__(self):
@@ -1786,7 +1788,8 @@ def each(*x): pass
 
 @funcdecorator
 def apmain(f):
-	def decorated(*, nolog=False):
+	def decorated(*, nolog=None):
+		if (nolog is None): nolog = not any(_logged_start)
 		if (hasattr(f, '_argdefs')):
 			while (f._argdefs):
 				args, kwargs = f._argdefs.popleft()
@@ -1826,6 +1829,12 @@ def aparg(*args, **kwargs):
 		f._argdefs.appendleft((args, kwargs))
 		return f
 	return decorator
+
+@funcdecorator
+def asyncrun(f):
+	def decorated(*args, **kwargs):
+		return asyncio.run(f(*args, **kwargs))
+	return decorated
 
 class VarInt:
 	@staticmethod
@@ -2010,7 +2019,11 @@ def lstripcount(s, chars=None):
 	ns = s.lstrip(chars)
 	return (len(s)-len(ns), ns)
 
-def Sexcepthook(exctype, exc, tb):
+def Sexcepthook(exctype, exc, tb, *, file=None, linesep='\n'):
+	if (file is not None): _file = file
+	else: _file = sys.stderr
+	_linesep = linesep
+
 	srcs = Sdict(linecache.getlines)
 	res = list()
 
@@ -2057,31 +2070,37 @@ def Sexcepthook(exctype, exc, tb):
 		res.append((file, name, lineno, sorted(lines), frame))
 
 	if (res):
-		print("\033[0;91mTraceback\033[0m \033[2m(most recent call last)\033[0m:")
+		print("\033[0;91mTraceback\033[0m \033[2m(most recent call last)\033[0m:", file=_file)
 		maxlnowidth = max((max(len(str(ln)) for ln, line, hline in lines) for file, name, lineno, lines, frame in res if lines), default=0)
 
-	last = None
+	last = lines = lastlines = None
 	for file, name, lineno, lines, frame in res:
 		if (os.path.commonpath((os.path.abspath(file), os.getcwd())) != '/'): file = os.path.relpath(file)
 
 		if ((file, lineno) != last):
 			filepath = (os.path.dirname(file)+os.path.sep if (os.path.dirname(file)) else '')
 			link = f'file://{socket.gethostname()}'+os.path.realpath(file) if (os.path.exists(file)) else file
-			if (lines or lineno > 0): print('  File '+terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(file)}\033[0m")+f", in \033[93m{name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}")
-			else: print('  \033[2mFile '+terminal_link(link, f"\033[36m{filepath}\033[96m{os.path.basename(file)}\033[0;2m")+f", in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[0m")
+			if (lines or lineno > 0): print('  File '+terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(file)}\033[0m")+f", in \033[93m{name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}", file=_file)
+			else: print('  \033[2mFile '+terminal_link(link, f"\033[36m{filepath}\033[96m{os.path.basename(file)}\033[0;2m")+f", in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[0m", file=_file)
 
 			mlw = int()
 			for ii, (ln, line, hline) in enumerate(lines):
-				mlw = max(mlw, len(line))
-				print(end=' '*(8+(maxlnowidth-len(str(ln)))))
-				#if (ln == lineno): print(end='\033[1m')
-				if (ii != len(lines)-1): print(end='\033[2m')
-				print(ln, end='\033[0m ')
-				print('\033[2m│', end='\033[0m ')
-				if (ln == lineno): print(end='\033[1m')
-				if (ii != len(lines)-1): print(end='\033[2m')
-				print(hline.rstrip().expandtabs(4), end='\033[0m\n') #'\033[0m'+ # XXX?
-		else: print(f"    \033[2m...\033[0min \033[93m{name}\033[0m{':'*bool(lines)}")
+				mlw = max(mlw, len(line.expandtabs(4)))
+				print(end=' '*(8+(maxlnowidth-len(str(ln)))), file=_file)
+				#if (ln == lineno): print(end='\033[1m', file=_file)  # bold lineno
+				if (ii != len(lines)-1): print(end='\033[2m', file=_file)
+				print(ln, end='\033[0m ', file=_file)
+				print('\033[2m│', end='\033[0m ', file=_file)
+				if (ln == lineno): hc = 1
+				#elif (ii != len(lines)-1): hc = 2  # dark context lines
+				else: hc = None
+				if (hc is not None):
+					print(end=f"\033[{hc}m", file=_file)
+					hline = hline.replace(r';00m', rf";00;{hc}m") # TODO FIXME \033
+				print(hline.rstrip().expandtabs(4), end='\033[0m\n', file=_file) #'\033[0m'+ # XXX?
+		else:
+			if (lastlines and _linesep is not None): print(end=_linesep, file=_file)
+			print("    \033[2m..."+('\033[0m'*bool(lines or lineno > 0))+f"in \033[93m{name}\033[0m{':'*bool(lines)}", file=_file)
 		last = (file, lineno)
 
 		if (lines):
@@ -2090,48 +2109,59 @@ def Sexcepthook(exctype, exc, tb):
 			c = frame.f_code
 
 			words = list()
-			for i in regex.findall(r'[^.]\b(\w+|[\w.]+)\b', lines[-1][1], overlapped=True):
-				if (words and i.startswith('.')): words[-1] += i
+			for i in regex.findall(r'[^.]\b(\w+|\.\w+)\b', lines[-1][1], overlapped=True):
+				if (words and i.startswith('.')): words.append(words[-1] + i) #words[-1] += i
 				else: words.append(i)
 
 			for i in S(words).uniquize():
 				v = None
 				for color, ns in ((93, frame.f_locals), (92, frame.f_globals), (95, builtins.__dict__)):
-					try: r = S(repr(operator.attrgetter(i)(S(ns)))).indent(first=False).fit(mlw)
+					try: r = S(repr(operator.attrgetter(i)(S(ns)))).indent(first=False)
 					except (KeyError, AttributeError): continue
 					except Exception as ex: color, r = 91, f"<exception in {i}.__repr__(): {repr(ex)}>"
 					else:
 						if (r == i): continue
+						rf = r.fit(mlw-len(i))
+						if (rf != r): r = terminal_link(r, rf)
 					v = f"\033[{color}m{r}\033[0m"
 					break
 				else:
 					if (i.replace('.', '').isidentifier() and not keyword.iskeyword(i) and i not in builtins.__dict__): v = '\033[90m<not found>\033[0m'
 
-				if (v is not None): print(f"{' '*12}\033[94m{i}\033[0;2m: {v}")
+				if (v is not None): print(f"{' '*12}\033[94m{i}\033[0;2m:\033[0m \033[2m{v}", file=_file)
 
-	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[0;2m{exctype.__name__}\033[0m")
+			if (_linesep is not None): print(end=_linesep, file=_file)
+		elif (not lastlines and _linesep is not None): print(end=_linesep, file=_file)
+
+		lastlines = lines
+
+	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[0;2m{exctype.__name__}\033[0m", file=_file)
 	elif (exctype is SyntaxError and exc.args):
 		try: line = highlight(exc.text)
 		except Exception: line = exc.text
-		print(f"\033[0;1;96m{exctype.__name__}\033[0m: {exc}")
-		if (line is not None): print(f"{line.rstrip().expandtabs(1)}\n{' '*(exc.offset-1)}\033[95m^\033[0m")
-	else: print(f"\033[0;1;91m{exctype.__name__}\033[0m{': '*bool(str(exc))}{exc}")
+		print(f"\033[0;1;96m{exctype.__name__}\033[0m: {exc}", file=_file)
+		if (line is not None): print(f"{line.rstrip().expandtabs(1)}\n{' '*(exc.offset-1)}\033[95m^\033[0m", file=_file)
+	else: print(f"\033[0;1;91m{exctype.__name__}\033[0m{': '*bool(str(exc))}{exc}", file=_file)
 
 	if (exc.__cause__ is not None):
-		print(" \033[0;1m> This exception was caused by:\033[0m\n")
-		Sexcepthook(type(exc.__cause__), exc.__cause__, exc.__cause__.__traceback__)
+		print(" \033[0;1m> This exception was caused by:\033[0m\n", file=_file)
+		Sexcepthook(type(exc.__cause__), exc.__cause__, exc.__cause__.__traceback__, file=_file, linesep=_linesep)
 
-	if (__repl__):
+	if (exc.__context__ is not None and not exc.__suppress_context__):
+		print(" \033[0;1m> During handling of the above exception, another exception occurred:\033[0m\n", file=_file)
+		Sexcepthook(type(exc.__context__), exc.__context__, exc.__context__.__traceback__, file=_file, linesep=_linesep)
+
+	if (__repl__ and tb is not None and tb.tb_frame.f_code.co_filename == '<stdin>'):
 		if (exctype is NameError and exc.args and
 		    (m := re.fullmatch(r"name '(.*)' is not defined", exc.args[0])) is not None and
 		    (module := importlib.util.find_spec(m[1])) is not None):
-			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[0m")
+			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[0m", file=_file)
 			frame.f_globals[m[1]] = module.loader.load_module()
 			#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
 		elif (exctype is AttributeError and exc.args and
 		      (m := re.fullmatch(r"module '(.*)' has no attribute '(.*)'", exc.args[0])) is not None and
 		      (module := importlib.util.find_spec(m[1]+'.'+m[2])) is not None):
-			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[0m")
+			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[0m", file=_file)
 			setattr(frame.f_globals[m[1]], m[2], module.loader.load_module())
 			#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
 def _Sexcepthook_install():
@@ -2209,7 +2239,11 @@ class TODO(NotImplementedError): pass
 class TEST(BaseException): pass
 class NonLoggingException(Exception): pass
 
-def exit(c=None, code=None, raw=False, nolog=False):
+def exit(c=None, code=None, raw=False, nolog=None):
+	global _logged_start
+	if (nolog is None): nolog = not any(_logged_start)
+		#name = inspect.stack()[1][0].f_globals.get('__name__')
+		#nolog = not (name is not None and _logged_start.get(name))
 	if (not nolog): sys.stderr.write('\r\033[K')
 	unlocklog()
 	db.save(nolog=True)
