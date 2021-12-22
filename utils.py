@@ -34,7 +34,8 @@ class ModuleProxy(module):
 
 def Simport(x, as_=None):
 	#inspect.stack()[1][0].f_globals
-	globals()[as_ or x] = ModuleProxy(x, as_)
+	#globals()[as_ or x] = ModuleProxy(x, as_)
+	globals()[as_ or x] = __import__(x) # XXX FIXME FIXME FIXME FIXME!!!
 
 _imports = (
 	'io',
@@ -79,7 +80,7 @@ _imports = (
 	'ctypes',
 	'getkey',
 	'locale',
-	'parser',
+	#'parser',
 	'pickle',
 	'psutil',
 	'random',
@@ -106,7 +107,7 @@ _imports = (
 	'aiocache',
 	'aiofiles',
 	'argparse',
-	'attrdict',
+	#'attrdict',
 	'builtins',
 	'datetime',
 	'operator',
@@ -135,7 +136,7 @@ _imports = (
 	'unicodedata',
 	'configparser',
 	'aioprocessing',
-	'better_exchook',
+	#'better_exchook',
 	'typing_inspect',
 	'multiprocessing_on_dill as multiprocessing',
 	#'nonexistenttest'
@@ -188,7 +189,7 @@ nl = endl = '\n'
 
 def isiterable(x): return isinstance(x, typing.Iterable)
 def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
-def isnumber(x): return isinstance(x, (int, float, complex))
+def isnumber(x): return isinstance(x, numbers.Number)
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args); return kwargs
 def hex(x, l=2): return '0x%%0%dX' % l % x
 def md5(x, n=1): x = x if (isinstance(x, bytes)) else str(x).encode(); return hashlib.md5(md5(x, n-1).encode() if (n > 1) else x).hexdigest()
@@ -206,9 +207,9 @@ def export(x):
 	if ('__all__' not in globals): all = globals['__all__'] = list()
 	elif (not isinstance(globals['__all__'], list)): all = globals['__all__'] = list(globals['__all__'])
 	else: all = globals['__all__']
-	all.append(x.__name__.rpartition('.')[-1])
+	all.append((x.__name__ if (hasattr(x, '__name__')) else x.__class__.__name__).rpartition('.')[-1])
 	return x
-def suppress_tb(f): f.__code__ = code_with(f.__code__, firstlineno=0, lnotab=b''); return f
+def suppress_tb(f): f.__code__ = code_with(f.__code__, firstlineno=0, **{'linetable' if (sys.version_info >= (3, 10)) else 'lnotab': b''}); return f
 
 def terminal_link(link, text=None): return f"\033]8;;{noesc.sub('', link)}\033\\{text if (text is not None) else link}\033]8;;\033\\"
 
@@ -492,7 +493,7 @@ class Sstr(S_type, str):
 	def sjust(self, n, *args, **kwargs):
 		return self.indent(n-len(self), *args, **kwargs)
 
-	def wrap(self, w, j='<', char=' ', loff=0, sep=' '):
+	def wrap(self, w, char=' ', loff=0, sep=' '):
 		w -= loff
 		if (len(self) <= w): return self
 		r, *s = self.split(sep)
@@ -641,7 +642,10 @@ def dispatch(f):  # TODO FIXME: f(*, x=3)
 		else:
 			if (() in _overloaded_functions[fname]): r = _overloaded_functions[fname][()](*args, **kwargs)
 			else:
-				ex = DispatchError(f"Parameters {S(', ').join((*map(type, args), *(f'{k}={type(v)}' for k, v in kwargs.items()))).join('()')} don't match any of '{fname}' signatures:\n{S(overloaded_format_signatures(fname, f.__qualname__, sep=endl)).indent(2, char=' ')}\n(called as: `{fname}({', '.join((*(S(repr(i)).fit(32) for i in args), *(S(f'{k}={v}').fit(32) for k, v in kwargs.items())))})')") # to hide in tb
+				def try_repr(x):  # TODO FIXME: was a hotfix, move out to global
+					try: return repr(x)
+					except Exception as ex: return object.__repr__(x)
+				ex = DispatchError(f"Parameters {S(', ').join((*map(type, args), *(f'{k}={type(v)}' for k, v in kwargs.items()))).join('()')} don't match any of '{fname}' signatures:\n{S(overloaded_format_signatures(fname, f.__qualname__, sep=endl)).indent(2, char=' ')}\n(called as: `{fname}({', '.join((*(S(try_repr(i)).fit(32) for i in args), *(S(f'{k}={v}').fit(32) for k, v in kwargs.items())))})')") # to hide in tb
 				raise ex
 		retval = _overloaded_functions_retval[fname][k]
 		if (retval is not inspect._empty and not isinstance(r, retval)):
@@ -2050,12 +2054,14 @@ def Sexcepthook(exctype, exc, tb, *, file=None, linesep='\n'):
 			loff = float('inf')
 			found_name = bool()
 
+			lastline = None
 			for i in range(lineno-1, 0, -1): #frame.f_lineno
 				try: line = src[i]
 				except IndexError: continue
 				if (line.isspace()): continue
 				cloff = lstripcount(line)[0]
-				if (cloff < loff or i+1 == lineno):
+				if (cloff < loff or i+1 == lineno or re.match(r'^\s*(elif|else|except|finally)\b', lastline)):
+					#if (cloff > loff): continue  # show only same-level constructs for continuator clauses
 					loff = cloff
 					try: hline = highlight(line)
 					except Exception: hline = line
@@ -2063,6 +2069,7 @@ def Sexcepthook(exctype, exc, tb, *, file=None, linesep='\n'):
 						hline = re.sub(fr"((?:def|class)\s+)({name})\b", '\\1\033[0;93m\\2\033[0;2m', hline, 1)
 						found_name = True
 					lines.add((i+1, line, hline))
+					lastline = line
 
 			#for i in range(*sorted((frame.f_lineno-1, lineno))):
 			#	lines.add((i+1, src[i]))
@@ -2074,10 +2081,13 @@ def Sexcepthook(exctype, exc, tb, *, file=None, linesep='\n'):
 		maxlnowidth = max((max(len(str(ln)) for ln, line, hline in lines) for file, name, lineno, lines, frame in res if lines), default=0)
 
 	last = lines = lastlines = None
+	repeated = int()
 	for file, name, lineno, lines, frame in res:
 		if (os.path.commonpath((os.path.abspath(file), os.getcwd())) != '/'): file = os.path.relpath(file)
 
 		if ((file, lineno) != last):
+			if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[0m\n", file=_file); repeated = int()
+
 			filepath = (os.path.dirname(file)+os.path.sep if (os.path.dirname(file)) else '')
 			link = f'file://{socket.gethostname()}'+os.path.realpath(file) if (os.path.exists(file)) else file
 			if (lines or lineno > 0): print('  File '+terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(file)}\033[0m")+f", in \033[93m{name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}", file=_file)
@@ -2099,11 +2109,15 @@ def Sexcepthook(exctype, exc, tb, *, file=None, linesep='\n'):
 					hline = hline.replace(r';00m', rf";00;{hc}m") # TODO FIXME \033
 				print(hline.rstrip().expandtabs(4), end='\033[0m\n', file=_file) #'\033[0m'+ # XXX?
 		else:
-			if (lastlines and _linesep is not None): print(end=_linesep, file=_file)
-			print("    \033[2m..."+('\033[0m'*bool(lines or lineno > 0))+f"in \033[93m{name}\033[0m{':'*bool(lines)}", file=_file)
+			if (lines == lastlines): repeated += 1
+			if (lines != lastlines or repeated <= 1):
+				if ((lines or lineno > 0) and not lastlines and _linesep is not None): print(end=_linesep, file=_file)
+				print("    \033[2m..."+('\033[0m'*bool(lines or lineno > 0))+f"in \033[93m{name}\033[0m{':'*bool(lines)}", file=_file)
+				if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[0m\n", file=_file); repeated = int()
 		last = (file, lineno)
 
-		if (lines):
+
+		if (lines and repeated < 2):
 			#try: c = compile(lines[-1][1].strip(), '', 'exec')
 			#except SyntaxError:
 			c = frame.f_code
@@ -2116,24 +2130,30 @@ def Sexcepthook(exctype, exc, tb, *, file=None, linesep='\n'):
 			for i in S(words).uniquize():
 				v = None
 				for color, ns in ((93, frame.f_locals), (92, frame.f_globals), (95, builtins.__dict__)):
-					try: r = S(repr(operator.attrgetter(i)(S(ns)))).indent(first=False)
+					try: r = S(repr(obj := operator.attrgetter(i)(S(ns)))).indent(first=False)
 					except (KeyError, AttributeError): continue
-					except Exception as ex: color, r = 91, f"<exception in {i}.__repr__(): {repr(ex)}>"
+					except Exception as ex: color, r = 91, S(f"<exception in {i}.__repr__(): {repr(ex)}>")
 					else:
 						if (r == i): continue
-						rf = r.fit(mlw-len(i))
-						if (rf != r): r = terminal_link(r, rf)
+					rf = r.fit(mlw-len(i)-1)
+					if (rf != r): r = terminal_link(r, rf)
 					v = f"\033[{color}m{r}\033[0m"
 					break
 				else:
 					if (i.replace('.', '').isidentifier() and not keyword.iskeyword(i) and i not in builtins.__dict__): v = '\033[90m<not found>\033[0m'
 
-				if (v is not None): print(f"{' '*12}\033[94m{i}\033[0;2m:\033[0m \033[2m{v}", file=_file)
+				if (v is not None):
+					try: i = terminal_link(obj.__name__+format_inspect_signature(inspect.signature(obj)), i)
+					except Exception:
+						try: i = terminal_link(str(type(obj)), i)
+						except Exception: pass
+					print(f"{' '*12}\033[94m{i}\033[0;2m:\033[0m \033[2m{v}", file=_file)
 
 			if (_linesep is not None): print(end=_linesep, file=_file)
 		elif (not lastlines and _linesep is not None): print(end=_linesep, file=_file)
-
 		lastlines = lines
+
+	if (repeated): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m times)\033[0m\n", file=_file); repeated = int() # TODO FIXME needed?
 
 	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[0;2m{exctype.__name__}\033[0m", file=_file)
 	elif (exctype is SyntaxError and exc.args):
