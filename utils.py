@@ -29,13 +29,12 @@ class ModuleProxy(module):
 	def __getattribute__(self, x):
 		module = __import__(object.__getattribute__(self, '__name__'))
 		try: inspect.stack()[1][0].f_globals[object.__getattribute__(self, '_as')] = module
-		except IndexError: pass
+		except (TypeError, IndexError): pass
 		return getattr(module, x)
 
 def Simport(x, as_=None):
-	#inspect.stack()[1][0].f_globals
-	#globals()[as_ or x] = ModuleProxy(x, as_)
-	globals()[as_ or x] = __import__(x) # XXX FIXME FIXME FIXME FIXME!!!
+	inspect.stack()[1][0].f_globals
+	globals()[as_ or x] = ModuleProxy(x, as_)
 
 _imports = (
 	'io',
@@ -1675,6 +1674,56 @@ class AttrProxy:
 	def keys(self):
 		return self.__dir__()
 
+class AttrDict(collections.UserDict): # TODO FIXME: .data
+	__slots__ = ('data',)
+
+	def __init__(self, dict=None, /, **kwargs):
+		super().__setattr__('data', {})
+		if (dict is not None): self.update(dict)
+		if (kwargs): self.update(kwargs)
+
+	def __getitem__(self, x):
+		r = super().__getitem__(x)
+		if (isinstance(r, dict) and not isinstance(r, AttrDict)): return AttrDict.of(r)
+		else: return r
+
+	def __getattr__(self, x):
+		d = self.__getattribute__('data')
+		try: return getattr(d, x)
+		except AttributeError as ex:
+			try: return self[x]
+			except KeyError as ex: e = ex
+		e.__suppress_context__ = True
+		raise AttributeError(*e.args) from e.with_traceback(None)
+
+	def __setattr__(self, k, v):
+		self.__setitem__(k, v)
+
+	def __delattr__(self, x):
+		self.__delitem__(x)
+
+	@classmethod
+	def of(cls, data: dict):
+		d = cls()
+		super().__setattr__(d, 'data', data)
+		return d
+
+class DefaultAttrDict(AttrDict):
+	__slots__ = ('default_factory',)
+
+	def __init__(self, default, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+		object.__setattr__(self, 'default_factory', default)
+
+	def __getitem__(self, x):
+		try: return super().__getitem__(x)
+		except KeyError: return self.__missing__()
+
+	def __missing__(self, x):
+		if (self.default_factory is None): raise KeyError(x)
+		r = self[x] = self.default_factory()
+		return r
+
 class Builder:
 	def __init__(self, cls, *args, **kwargs):
 		self.cls = cls
@@ -2023,7 +2072,7 @@ def lstripcount(s, chars=None):
 	ns = s.lstrip(chars)
 	return (len(s)-len(ns), ns)
 
-def Sexcepthook(exctype, exc, tb, *, file=None, linesep='\n'):
+def Sexcepthook(exctype, exc, tb, *, file=None, linesep='\n'): # TODO: bpo-43914
 	if (file is not None): _file = file
 	else: _file = sys.stderr
 	_linesep = linesep
