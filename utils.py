@@ -206,7 +206,7 @@ def export(x):
 	if ('__all__' not in globals): all = globals['__all__'] = list()
 	elif (not isinstance(globals['__all__'], list)): all = globals['__all__'] = list(globals['__all__'])
 	else: all = globals['__all__']
-	all.append((x.__name__ if (hasattr(x, '__name__')) else x.__class__.__name__).rpartition('.')[-1])
+	all.append((x.__qualname__ if (hasattr(x, '__qualname__')) else x.__name__ if (hasattr(x, '__name__')) else x.__class__.__name__).rpartition('.')[-1])
 	return x
 def suppress_tb(f): f.__code__ = code_with(f.__code__, firstlineno=0, **{'linetable' if (sys.version_info >= (3, 10)) else 'lnotab': b''}); return f
 
