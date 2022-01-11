@@ -597,48 +597,49 @@ def funcdecorator(df=None, /, *, signature=None, suppresstb=True): # TODO: __dic
 
 class DispatchError(TypeError): pass
 
-class dispatch:  # TODO FIXME: f(*, x=3)
+class dispatch:
 	""" Decorator which implements function overloading (dispatching) by argument and return type decorations. """
 
 	class __FillValue: __slots__ = ()
 	__FillValue = __FillValue()
 
-	class __Param:
-		__slots__ = ('name', 'type', 'kind', 'required')
-
-		def __init__(self, name, type, kind, required):
-			self.name, self.type, self.kind, self.required = name, type, kind, required
-
+	class __Param(inspect.Parameter):
 		def __repr__(self):
 			return f"<Parameter '{self.name}: {format_inspect_annotation(self.type)}' ({self.kind}, {'default' if (not self.required) else 'required'})>"
 
+		@property
+		def type(self):
+			return self.annotation
+
+		@property
+		def required(self):
+			return (self.default is self._empty)
+
 		@classmethod
 		def from_inspect_parameter(cls, param):
-			return cls(param.name, param.annotation, param.kind, (param.default is inspect._empty))
+			return cls(name=param.name, kind=param.kind, default=param.default, annotation=param.annotation)
 
-	__slots__ = ('__qualname__', '__origname__')
-	_overloaded_functions = Sdict(dict)
-	_overloaded_functions_retval = Sdict(dict)
-	_overloaded_functions_docstings = Sdict(dict)
+	__slots__ = ('__call__', '__qualname__', '__origname__', '__origmodule__')
+	__overloaded_functions = Sdict(dict)
+	__overloaded_functions_docstrings = Sdict(dict)
 
 	def __init__(self, f):
-		self.__origname__ = f.__name__
-		#self.__module__ = f.__module__
+		self.__origname__, self.__origmodule__ = f.__name__, f.__module__
 		self.__qualname__ = f.__qualname__
+		self.__call__ = method(function(code_with(self.___call__.__code__, name=f"<overload handler of '{self.__qualname__}'>"), self.___call__.__globals__), self)
 
 		if (getattr(f, '__signature__', None) is ...): del f.__signature__ # TODO FIXME ???
 		fsig = inspect.signature(f)
 		params_annotation = tuple(map(self.__Param.from_inspect_parameter, fsig.parameters.values()))
 
-		self._overloaded_functions[self.__qualname__][params_annotation] = f
-		self._overloaded_functions_retval[self.__qualname__][params_annotation] = fsig.return_annotation
-		self._overloaded_functions_docstings[self.__qualname__][fsig] = f.__doc__
+		self.__overloaded_functions[self.__origmodule__, self.__qualname__][params_annotation, fsig.return_annotation] = f
+		self.__overloaded_functions_docstrings[self.__origmodule__, self.__qualname__][fsig] = f.__doc__
 
 		f.__origname__, f.__name__ = f.__name__, f"Overloaded {f.__name__}"
 		f.__code__ = code_with(f.__code__, name=f"<overloaded '{f.__qualname__}' for {f.__origname__}{format_inspect_signature(fsig)}>")
 
 		#print(f"\n\033[1;92m{self.__qualname__}()\033[0;1m:\033[0m")
-		#for params in self._overloaded_functions[self.__qualname__]:
+		#for params, retval in self.__overloaded_functions[self.__origmodule__, self.__qualname__]:
 		#	print("     \N{bullet}", end='')
 		#	for param in params:
 		#		print(f"\t\033[1;93m{param.name}\033[0m: \033[1;94m{format_inspect_annotation(param.type)}\033[0m\n\t  \033[2m({param.kind.name}, {'default' if (not param.required) else 'required'})\033[0m\n")
@@ -648,65 +649,50 @@ class dispatch:  # TODO FIXME: f(*, x=3)
 		return f"<overloaded function '{self.__qualname__}'>"
 
 	@suppress_tb
-	def __call__(self, *args, **kwargs):
-		f, params = self.__dispatch(*args, **kwargs)
+	def ___call__(self, *args, **kwargs):
+		f, params, retval = self.__dispatch(*args, **kwargs)
 
 		r = f(*args, **kwargs)
 
-		if ((retval := self._overloaded_functions_retval[self.__qualname__][params]) is not inspect._empty):
-			if (not self.__typecheck(r, retval)): raise DispatchError(f"Return value of type {type(r)} doesn't match the return annotation of the corresponding '{self.__qualname__}' signature: {self.__origname__}{_format_inspect_signature(params, retval)}")
+		if (retval is not inspect._empty):
+			if (not self.__typecheck(r, retval)): raise DispatchError(f"Return value of type {type(r)} doesn't match the return annotation of the corresponding '{self.__qualname__}' signature:\n  {self.__origname__}{_format_inspect_signature({i.name: i for i in params}, retval)}\n(called as: '{self.__origname__}({', '.join((*(S(try_repr(i)).fit(32) for i in args), *(S(f'{k}={try_repr(v)}').fit(32) for k, v in kwargs.items())))})')")
 
 		return r
 
 	def __get__(self, obj, objcls):
-		return lambda *args, **kwargs: self(obj, *args, **kwargs)
+		return method(self, obj)
 
 	def __getitem__(self, *t):
-		return self._overloaded_functions[self.__qualname__][t]
+		return self.__overloaded_functions[self.__origmodule__, self.__qualname__][t]
 
 	@suppress_tb
-	def __dispatch(self, *args, **kwargs): # TODO FIXME: inspect.Signature.bind()?
+	def __dispatch(self, *args, **kwargs):
 		args = list(args)
 
-		for params, func in self._overloaded_functions[self.__qualname__].items():
-			i = int()
+		for (params, retval), func in self.__overloaded_functions[self.__origmodule__, self.__qualname__].items():
+			fsig = inspect.signature(func)
 
-			no = True
+			try: bound = fsig.bind(*args, **kwargs)
+			except TypeError: continue
 
-			for a in args:
-				if (i >= len(params)): break
-				param = params[i]
-				if (not self.__typecheck(a, param.type)): break
-				if (param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)): i += 1
-			else: no = False
+			pars = {i.name: i for i in params}
 
-			if (no): continue
+			ok = bool()
+			for k, v in bound.arguments.items():
+				try: p = pars[k]
+				except KeyError: break
+				if (not self.__typecheck(v, p.type)): break
+			else: ok = True
+			if (not ok): continue
 
-			if (i < len(params) and params[i].kind == inspect.Parameter.VAR_POSITIONAL): i += 1
+			bound.apply_defaults()
 
-			no = True
-			kw = {j.name: j for j in params[i:]}
-			pkw = set()
-			varkw = tuple(filter(lambda x: x.kind == inspect.Parameter.VAR_KEYWORD, kw.values()))
+			return (func, params, retval)
 
-			for a, av in kwargs.items():
-				try: ckw = kw[a]
-				except KeyError:
-					if (not varkw): break
-					ckw = varkw[0]
-				if (not self.__typecheck(av, ckw.type)): break
-				pkw.add(a)
-			else: no = False
-
-			if (no): continue
-			if (not varkw and ({k for k, v in kw.items() if v.required} - pkw)): continue
-
-			return (func, params)
-
-		try: return (self._overloaded_functions[self.__qualname__][()], ())
+		try: return (self.__overloaded_functions[self.__origmodule__, self.__qualname__][(), inspect._empty], (), inspect._empty)
 		except KeyError: pass
 
-		raise DispatchError(f"Parameters {S(', ').join((*(format_inspect_annotation(type(i)) for i in args), *(f'{k}={format_inspect_annotation(type(v))}' for k, v in kwargs.items()))).join('()')} don't match any of '{self.__qualname__}' signatures:\n{S(overloaded_format_signatures(self.__qualname__, sep=endl)).indent(2, char=' ')}\n(called as: '{self.__origname__}({', '.join((*(S(try_repr(i)).fit(32) for i in args), *(S(f'{k}={try_repr(v)}').fit(32) for k, v in kwargs.items())))})')")
+		raise DispatchError(f"Parameters {S(', ').join((*(format_inspect_annotation(type(i)) for i in args), *(f'{k}: {format_inspect_annotation(type(v))}' for k, v in kwargs.items()))).join('()')} don't match any of '{self.__qualname__}' signatures:\n{'  • '+f'{ENDL}  • '.join(self.format_signatures(sep=ENDL).split(ENDL))}\n(called as: '{self.__origname__}({', '.join((*(S(try_repr(i)).fit(32) for i in args), *(S(f'{k}={try_repr(v)}').fit(32) for k, v in kwargs.items())))})')")
 
 	@classmethod
 	def __typecheck(cls, o, t):
@@ -723,14 +709,13 @@ class dispatch:  # TODO FIXME: f(*, x=3)
 		if (args := typing_inspect.get_args(t)):
 			if ((origin := typing_inspect.get_origin(t)) is not None and issubclass(origin, typing.Tuple) and isinstance(o, typing.Tuple)):
 				if (not all(itertools.starmap(cls.__typecheck, itertools.zip_longest(o, args, fillvalue=cls.__FillValue)))): return False
-
-			if (isinstance(o, typing.Iterable) and not isinstance(o, typing.Iterator)):
+			elif (isinstance(o, typing.Iterable) and not isinstance(o, typing.Iterator)):
 				if (not all(cls.__typecheck(i, args[0]) for i in o)): return False
 
 		return True
 
 	def format_signatures(self, sep='\n\n'):
-		return sep.join(Sstr().join((self.__qualname__, format_inspect_signature(fsig), ':\n\b    '+doc if (doc) else '')) for fsig, doc in self._overloaded_functions_docstings[self.__qualname__].items())
+		return sep.join(Sstr().join((self.__qualname__, format_inspect_signature(fsig), ':\n\b    '+doc if (doc) else '')) for fsig, doc in self.__overloaded_functions_docstrings[self.__origmodule__, self.__qualname__].items() if fsig is not None)
 
 	@property
 	def __name__(self):
@@ -739,7 +724,7 @@ class dispatch:  # TODO FIXME: f(*, x=3)
 	@property
 	def __doc__(self):
 		signatures = self.format_signatures()
-		try: doc = self._overloaded_functions_docstings[self.__qualname__][()]
+		try: doc = self.__overloaded_functions_docstrings[self.__origmodule__, self.__qualname__][None]
 		except KeyError: return signatures
 		else: return (doc + '\n\n' + signatures)
 
@@ -748,12 +733,12 @@ class dispatch:  # TODO FIXME: f(*, x=3)
 		return ...
 
 	@property
-	def __code__(self):
-		return code_with(self.__call__.__code__, name=f"<overload handler of '{f.__qualname__}'>") # TODO move to __new__
+	def signatures(self):
+		return tuple(self.__overloaded_functions_docstrings[self.__origmodule__, self.__qualname__].keys())
 
 @funcdecorator
 def dispatch_meta(f):
-	if (f.__doc__): dispatch._overloaded_functions_docstings[f.__qualname__][()] = f.__doc__
+	if (f.__doc__): dispatch._dispatch__overloaded_functions_docstrings[f.__module__, f.__qualname__][None] = f.__doc__
 	return f
 
 def format_inspect_signature(fsig): return _format_inspect_signature(fsig.parameters, fsig.return_annotation)
@@ -774,7 +759,10 @@ def _format_inspect_signature(parameters, return_annotation=inspect._empty):
 	if (return_annotation is not inspect._empty): rendered += f" -> {format_inspect_annotation(return_annotation)}"
 	return rendered
 
-def format_inspect_annotation(annotation): return (annotation.__name__ if (isinstance(annotation, function)) else inspect.formatannotation(annotation))
+def format_inspect_annotation(annotation):
+	if (isinstance(annotation, function)): return annotation.__name__
+	if (isinstance(annotation, tuple)): return ', '.join(map(format_inspect_annotation, annotation)).join('()')
+	return inspect.formatannotation(annotation)
 
 def cast(*types): return lambda x: (t(i) if (not isinstance(i, t)) else i for t, i in zip(types, x))
 
@@ -1234,7 +1222,7 @@ class Progress:
 
 	def __del__(self):
 		try:
-			if (self.printed): sys.stderr.write('\n')
+			if (self.printed and self._pool is None): sys.stderr.write('\n')
 		except AttributeError: pass
 
 	def format(self, cv, width, *, add_base=None, add_speed_eta=None):
@@ -1303,10 +1291,6 @@ class ProgressPool:
 		self.ranges = list()
 
 	def __del__(self):
-		try:
-			for i in self.p:
-				i.printed = False
-		except AttributeError: pass
 		sys.stderr.write('\033[J')
 		sys.stderr.flush()
 

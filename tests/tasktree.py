@@ -56,12 +56,16 @@ check(NodesTree({
 │           └── 8
 └── last""")
 
+print()
+
 check(NodesTree({
 	1: {2: 3},
 }).format(), """\
 ╾── 1
     └── 2
         └── 3""")
+
+print()
 
 tasks = [
 	TaskTree.Task('Task 1', [
@@ -87,4 +91,5 @@ del tt
 
 log('TaskTree test ok\n')
 
-# by Sdore, 2019
+# by Sdore, 2019-2022
+#  www.sdore.me

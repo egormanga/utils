@@ -2,15 +2,15 @@
 # Utils lib dispatch() test
 
 import typing
-from utils.nolog import S, log, dispatch, dispatch_typecheck
+from utils.nolog import S, DispatchError, log, dispatch
 
 def check(v, s):
 	print(repr(v))
-	assert v == s
+	assert (v == s)
 
 def checkex(ex):
 	print(f"{type(ex).__name__}: {ex}")
-	assert ex
+	assert (ex)
 
 @dispatch
 def f(x: int) -> str: return str(x)
@@ -118,7 +118,7 @@ t = SubTest()
 check(t.f('a'), "<class 'str'> a")
 check(t.f(0), 'This is an integer: 0 !')
 
-assert dispatch_typecheck(('  ', 7), typing.Tuple[str, int])
+assert (dispatch._dispatch__typecheck(('  ', 7), typing.Tuple[str, int]))
 
 @dispatch
 def ff(x: int): pass
@@ -133,4 +133,5 @@ checkex(e)
 
 log('dispatch() test ok\n')
 
-# by Sdore, 2019
+# by Sdore, 2019-2022
+#  www.sdore.me
