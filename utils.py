@@ -660,7 +660,7 @@ class dispatch:
 		return r
 
 	def __get__(self, obj, objcls):
-		return method(self, obj)
+		return method(self, obj) if (obj is not None) else self
 
 	def __getitem__(self, *t):
 		return self.__overloaded_functions[self.__origmodule__, self.__qualname__][t]
