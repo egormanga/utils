@@ -1,2 +1,3 @@
 from utils import *
-setutilsnologimport()
+try: setutilsnologimport()
+except NameError: pass

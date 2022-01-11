@@ -184,7 +184,7 @@ TracebackType = types.TracebackType
 NoneType = type(None)
 inf = float('inf')
 nan = float('nan')
-nl = endl = '\n'
+nl = endl = NL = ENDL = '\n'
 
 def isiterable(x): return isinstance(x, typing.Iterable)
 def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
@@ -195,6 +195,9 @@ def md5(x, n=1): x = x if (isinstance(x, bytes)) else str(x).encode(); return ha
 def b64(x): return base64.b64encode(x if (isinstance(x, bytes)) else str(x).encode()).decode()
 def ub64(x): return base64.b64decode(x).decode()
 def randstr(n=16, *, caseless=False, seed=None): return str().join((random.Random(seed) if (seed is not None) else random).choices(string.ascii_lowercase if (caseless) else string.ascii_letters, k=n))
+def try_repr(x):
+	try: return repr(x)
+	except Exception: return object.__repr__(x)
 def safeexec():
 	try:
 		sys.stderr.write('\033[2m>>> ')
@@ -211,6 +214,16 @@ def export(x):
 def suppress_tb(f): f.__code__ = code_with(f.__code__, firstlineno=0, **{'linetable' if (sys.version_info >= (3, 10)) else 'lnotab': b''}); return f
 
 def terminal_link(link, text=None): return f"\033]8;;{noesc.sub('', link)}\033\\{text if (text is not None) else link}\033]8;;\033\\"
+
+try: pygments
+except ModuleNotFoundError: pass
+else: import pygments.lexers, pygments.formatters
+
+#@dispatch
+def highlight(s: str, *, lexer=None, formatter=None):
+	if (lexer is None): lexer = pygments.lexers.PythonLexer()
+	if (formatter is None): formatter = pygments.formatters.TerminalFormatter(bg='dark')
+	return pygments.highlight(s, lexer, formatter)
 
 def S(x=None, *, ni_ok=False):
 	""" Convert `x' to an instance of corresponding S-type. """
@@ -565,6 +578,8 @@ def funcdecorator(df=None, /, *, signature=None, suppresstb=True): # TODO: __dic
 		for i in filter(lambda x: not x.startswith('__'), dir(f)):
 			setattr(nf, i, getattr(f, i))
 
+		nf.__wrapped__ = f
+
 		return nf
 
 	#dfsig, ndfsig = inspect.signature(df), inspect.signature(ndf)
@@ -580,98 +595,174 @@ def funcdecorator(df=None, /, *, signature=None, suppresstb=True): # TODO: __dic
 
 	return ndf
 
-class DispatchFillValue: pass
 class DispatchError(TypeError): pass
-def dispatch_typecheck(o, t):
-	if (t is None or t is inspect._empty): return True
-	if (isinstance(o, DispatchFillValue) or isinstance(t, DispatchFillValue)): return False
-	if (isinstance(t, (function, builtin_function_or_method))): return bool(t(o))
-	if (not isinstance(o, (typing_inspect.get_constraints(t) or type(o)) if (isinstance(t, typing.TypeVar)) else typing_inspect.get_origin(t) or t)): return False
-	if (isinstance(o, typing.Tuple) and typing_inspect.get_origin(t) and issubclass(typing_inspect.get_origin(t), typing.Tuple) and typing_inspect.get_args(t) and not all(itertools.starmap(dispatch_typecheck, itertools.zip_longest(o, typing_inspect.get_args(t), fillvalue=DispatchFillValue())))): return False
-	if (isinstance(o, typing.Iterable) and not isinstance(o, (typing.Iterator)) and typing_inspect.get_args(t) and not all(dispatch_typecheck(i, typing_inspect.get_args(t)[0]) for i in o)): return False
-	return True
-_overloaded_functions = Sdict(dict)
-_overloaded_functions_retval = Sdict(dict)
-_overloaded_functions_docstings = Sdict(dict)
-def dispatch(f):  # TODO FIXME: f(*, x=3)
-	fname = f.__qualname__
-	if (getattr(f, '__signature__', None) == ...): del f.__signature__ # TODO FIXME ???
-	fsig = inspect.signature(f)
-	params_annotation = tuple((i[0], (None if (i[1].annotation is inspect._empty) else i[1].annotation, i[1].default is not inspect._empty, i[1].kind)) for i in fsig.parameters.items())
 
-	_overloaded_functions[fname][params_annotation] = f
-	_overloaded_functions_retval[fname][params_annotation] = type(fsig.return_annotation) if (fsig.return_annotation is None) else fsig.return_annotation
-	_overloaded_functions_docstings[fname][fsig] = f.__doc__
+class dispatch:  # TODO FIXME: f(*, x=3)
+	""" Decorator which implements function overloading (dispatching) by argument and return type decorations. """
 
-	#dplog([(dict(i), '—'*40) for i in _overloaded_functions[fname]], width=60)
+	class __FillValue: __slots__ = ()
+	__FillValue = __FillValue()
+
+	class __Param:
+		__slots__ = ('name', 'type', 'kind', 'required')
+
+		def __init__(self, name, type, kind, required):
+			self.name, self.type, self.kind, self.required = name, type, kind, required
+
+		def __repr__(self):
+			return f"<Parameter '{self.name}: {format_inspect_annotation(self.type)}' ({self.kind}, {'default' if (not self.required) else 'required'})>"
+
+		@classmethod
+		def from_inspect_parameter(cls, param):
+			return cls(param.name, param.annotation, param.kind, (param.default is inspect._empty))
+
+	__slots__ = ('__qualname__', '__origname__')
+	_overloaded_functions = Sdict(dict)
+	_overloaded_functions_retval = Sdict(dict)
+	_overloaded_functions_docstings = Sdict(dict)
+
+	def __init__(self, f):
+		self.__origname__ = f.__name__
+		#self.__module__ = f.__module__
+		self.__qualname__ = f.__qualname__
+
+		if (getattr(f, '__signature__', None) is ...): del f.__signature__ # TODO FIXME ???
+		fsig = inspect.signature(f)
+		params_annotation = tuple(map(self.__Param.from_inspect_parameter, fsig.parameters.values()))
+
+		self._overloaded_functions[self.__qualname__][params_annotation] = f
+		self._overloaded_functions_retval[self.__qualname__][params_annotation] = fsig.return_annotation
+		self._overloaded_functions_docstings[self.__qualname__][fsig] = f.__doc__
+
+		f.__origname__, f.__name__ = f.__name__, f"Overloaded {f.__name__}"
+		f.__code__ = code_with(f.__code__, name=f"<overloaded '{f.__qualname__}' for {f.__origname__}{format_inspect_signature(fsig)}>")
+
+		#print(f"\n\033[1;92m{self.__qualname__}()\033[0;1m:\033[0m")
+		#for params in self._overloaded_functions[self.__qualname__]:
+		#	print("     \N{bullet}", end='')
+		#	for param in params:
+		#		print(f"\t\033[1;93m{param.name}\033[0m: \033[1;94m{format_inspect_annotation(param.type)}\033[0m\n\t  \033[2m({param.kind.name}, {'default' if (not param.required) else 'required'})\033[0m\n")
+		#	print()
+
+	def __repr__(self):
+		return f"<overloaded function '{self.__qualname__}'>"
 
 	@suppress_tb
-	def overloaded(*args, **kwargs): # TODO FIXME: inspect.Signature.bind()?
-		args = list(args)
-		for k, v in _overloaded_functions[fname].items():
-			#dplog(k)
-			i = int()
-			no = True
-			for ii, a in enumerate(args):
-				if (i >= len(k)): break
-				if (not dispatch_typecheck(a, k[i][1][0])): break
-				if (k[i][1][2] in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)): i += 1
-			else: no = False
-			if (no): continue
+	def __call__(self, *args, **kwargs):
+		f, params = self.__dispatch(*args, **kwargs)
 
-			if (i < len(k) and k[i][1][2] == inspect.Parameter.VAR_POSITIONAL): i += 1
+		r = f(*args, **kwargs)
 
-			no = True
-			kw = dict(k[i:])
-			pkw = set()
-			varkw = tuple(filter(lambda x: x[2] == inspect.Parameter.VAR_KEYWORD, kw.values()))
-			for a in kwargs:
-				if (a not in kw):
-					if (not varkw): break
-					ckw = varkw[0]
-				else: ckw = kw[a]
-				if (not dispatch_typecheck(kwargs[a], ckw[0])): break
-				pkw.add(a)
-			else: no = False
-			if (no): continue
-			if (not varkw and {i for i in kw if (not kw[i][1])}-pkw): continue
+		if ((retval := self._overloaded_functions_retval[self.__qualname__][params]) is not inspect._empty):
+			if (not self.__typecheck(r, retval)): raise DispatchError(f"Return value of type {type(r)} doesn't match the return annotation of the corresponding '{self.__qualname__}' signature: {self.__origname__}{_format_inspect_signature(params, retval)}")
 
-			r = v(*args, **kwargs)
-			break
-		else:
-			if (() in _overloaded_functions[fname]): r = _overloaded_functions[fname][()](*args, **kwargs)
-			else:
-				def try_repr(x):  # TODO FIXME: was a hotfix, move out to global
-					try: return repr(x)
-					except Exception as ex: return object.__repr__(x)
-				ex = DispatchError(f"Parameters {S(', ').join((*map(type, args), *(f'{k}={type(v)}' for k, v in kwargs.items()))).join('()')} don't match any of '{fname}' signatures:\n{S(overloaded_format_signatures(fname, f.__qualname__, sep=endl)).indent(2, char=' ')}\n(called as: `{fname}({', '.join((*(S(try_repr(i)).fit(32) for i in args), *(S(f'{k}={v}').fit(32) for k, v in kwargs.items())))})')") # to hide in tb
-				raise ex
-		retval = _overloaded_functions_retval[fname][k]
-		if (retval is not inspect._empty and not isinstance(r, retval)):
-			raise DispatchError(f"Return value of type {type(r)} doesn't match return annotation of appropriate '{fname}' signature")
 		return r
 
-	overloaded.__name__ = f"Overloaded {f.__name__}"
-	overloaded.__qualname__, overloaded.__module__ = f.__qualname__, f.__module__
-	overloaded.__doc__ = (_overloaded_functions_docstings[fname][()]+'\n\n' if (() in _overloaded_functions_docstings[fname]) else '') + overloaded_format_signatures(fname, f.__qualname__)
-	overloaded.__signature__ = ...
-	overloaded.__code__ = code_with(overloaded.__code__, name=f"<overload handler of '{f.__qualname__}'>")
+	def __get__(self, obj, objcls):
+		return lambda *args, **kwargs: self(obj, *args, **kwargs)
 
-	f.__name__ = f"Overloaded {f.__name__}"
-	f.__code__ = code_with(f.__code__, name=f"<overloaded '{f.__qualname__}' for {f.__name__}{format_inspect_signature(fsig)}>")
+	def __getitem__(self, *t):
+		return self._overloaded_functions[self.__qualname__][t]
 
-	return overloaded
+	@suppress_tb
+	def __dispatch(self, *args, **kwargs): # TODO FIXME: inspect.Signature.bind()?
+		args = list(args)
+
+		for params, func in self._overloaded_functions[self.__qualname__].items():
+			i = int()
+
+			no = True
+
+			for a in args:
+				if (i >= len(params)): break
+				param = params[i]
+				if (not self.__typecheck(a, param.type)): break
+				if (param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)): i += 1
+			else: no = False
+
+			if (no): continue
+
+			if (i < len(params) and params[i].kind == inspect.Parameter.VAR_POSITIONAL): i += 1
+
+			no = True
+			kw = {j.name: j for j in params[i:]}
+			pkw = set()
+			varkw = tuple(filter(lambda x: x.kind == inspect.Parameter.VAR_KEYWORD, kw.values()))
+
+			for a, av in kwargs.items():
+				try: ckw = kw[a]
+				except KeyError:
+					if (not varkw): break
+					ckw = varkw[0]
+				if (not self.__typecheck(av, ckw.type)): break
+				pkw.add(a)
+			else: no = False
+
+			if (no): continue
+			if (not varkw and ({k for k, v in kw.items() if v.required} - pkw)): continue
+
+			return (func, params)
+
+		try: return (self._overloaded_functions[self.__qualname__][()], ())
+		except KeyError: pass
+
+		raise DispatchError(f"Parameters {S(', ').join((*(format_inspect_annotation(type(i)) for i in args), *(f'{k}={format_inspect_annotation(type(v))}' for k, v in kwargs.items()))).join('()')} don't match any of '{self.__qualname__}' signatures:\n{S(overloaded_format_signatures(self.__qualname__, sep=endl)).indent(2, char=' ')}\n(called as: '{self.__origname__}({', '.join((*(S(try_repr(i)).fit(32) for i in args), *(S(f'{k}={try_repr(v)}').fit(32) for k, v in kwargs.items())))})')")
+
+	@classmethod
+	def __typecheck(cls, o, t):
+		if (t is None or t is inspect._empty): return True
+		if (o is cls.__FillValue or t is cls.__FillValue): return False
+
+		if (isinstance(t, (function, builtin_function_or_method))): return bool(t(o))
+
+		if (isinstance(t, typing.TypeVar)):
+			if (not isinstance(o, typing_inspect.get_constraints(t))): return False
+		else:
+			if (not isinstance(o, typing_inspect.get_origin(t) or t)): return False
+
+		if (args := typing_inspect.get_args(t)):
+			if ((origin := typing_inspect.get_origin(t)) is not None and issubclass(origin, typing.Tuple) and isinstance(o, typing.Tuple)):
+				if (not all(itertools.starmap(cls.__typecheck, itertools.zip_longest(o, args, fillvalue=cls.__FillValue)))): return False
+
+			if (isinstance(o, typing.Iterable) and not isinstance(o, typing.Iterator)):
+				if (not all(cls.__typecheck(i, args[0]) for i in o)): return False
+
+		return True
+
+	def format_signatures(self, sep='\n\n'):
+		return sep.join(Sstr().join((self.__qualname__, format_inspect_signature(fsig), ':\n\b    '+doc if (doc) else '')) for fsig, doc in self._overloaded_functions_docstings[self.__qualname__].items())
+
+	@property
+	def __name__(self):
+		return f"Overloaded {self.__origname__}"
+
+	@property
+	def __doc__(self):
+		signatures = self.format_signatures()
+		try: doc = self._overloaded_functions_docstings[self.__qualname__][()]
+		except KeyError: return signatures
+		else: return (doc + '\n\n' + signatures)
+
+	@property
+	def __signature__(self):
+		return ...
+
+	@property
+	def __code__(self):
+		return code_with(self.__call__.__code__, name=f"<overload handler of '{f.__qualname__}'>") # TODO move to __new__
+
+@funcdecorator
 def dispatch_meta(f):
-	if (f.__doc__): _overloaded_functions_docstings[f.__qualname__][()] = f.__doc__
+	if (f.__doc__): dispatch._overloaded_functions_docstings[f.__qualname__][()] = f.__doc__
 	return f
-def overloaded_format_signatures(fname, qualname, sep='\n\n'): return sep.join(Sstr().join((qualname, format_inspect_signature(fsig), ':\n\b    '+doc if (doc) else '')) for fsig, doc in _overloaded_functions_docstings[fname].items())
 
-def format_inspect_signature(fsig):
+def format_inspect_signature(fsig): return _format_inspect_signature(fsig.parameters, fsig.return_annotation)
+def _format_inspect_signature(parameters, return_annotation=inspect._empty):
 	result = list()
 	posonlysep = False
 	kwonlysep = True
 
-	for p in fsig.parameters.values():
+	for p in parameters.values():
 		if (p.kind == inspect.Parameter.POSITIONAL_ONLY): posonlysep = True
 		elif (posonlysep): result.append('/'); posonlysep = False
 		if (p.kind == inspect.Parameter.VAR_POSITIONAL): kwonlysep = False
@@ -680,11 +771,10 @@ def format_inspect_signature(fsig):
 
 	if (posonlysep): result.append('/')
 	rendered = ', '.join(result).join('()')
-	if (fsig.return_annotation is not inspect._empty): rendered += f" -> {inspect.formatannotation(fsig.return_annotation)}"
+	if (return_annotation is not inspect._empty): rendered += f" -> {format_inspect_annotation(return_annotation)}"
 	return rendered
 
-def format_inspect_annotation(annotation):
-	return annotation.__name__ if (isinstance(annotation, function)) else inspect.formatannotation(annotation)
+def format_inspect_annotation(annotation): return (annotation.__name__ if (isinstance(annotation, function)) else inspect.formatannotation(annotation))
 
 def cast(*types): return lambda x: (t(i) if (not isinstance(i, t)) else i for t, i in zip(types, x))
 
@@ -1459,8 +1549,10 @@ global_lambdas = list() # dunno why
 def global_lambda(l): global_lambdas.append(l); return global_lambdas[-1]
 
 @dispatch
+@suppress_tb
 def singleton(C: type): C.__new__ = cachedfunction(C.__new__); return C()
 @dispatch
+@suppress_tb
 def singleton(*args, **kwargs): return lambda C: C(*args, **kwargs)
 
 class lc:
@@ -1518,12 +1610,25 @@ class timecounter:
 		if (self.ended is None): return time.time()-self.started
 		return self.ended-self.started
 
-class classproperty:
+class classonlymethod:
+	__slots__ = ('__func__',)
+
 	def __init__(self, f):
-		self.f = f
+		self.__func__ = f
+
+	@suppress_tb
+	def __get__(self, obj, cls=None):
+		if (obj is not None): raise AttributeError(f"'{cls.__name__}.{self.__func__.__name__}()' is a class-only method.")
+		return functools.partial(self.__func__, cls)
+
+class classproperty:
+	__slots__ = ('__func__',)
+
+	def __init__(self, f):
+		self.__func__ = f
 
 	def __get__(self, obj, cls):
-		return self.f(cls)
+		return self.__func__(cls)
 
 class attrget:
 	__slots__ = ('f',)
@@ -1674,39 +1779,98 @@ class AttrProxy:
 	def keys(self):
 		return self.__dir__()
 
-class AttrDict(collections.UserDict): # TODO FIXME: .data
-	__slots__ = ('data',)
+class UserDict(collections.UserDict):
+	__slots__ = ('_UserDict__dict',)
 
 	def __init__(self, dict=None, /, **kwargs):
-		super().__setattr__('data', {})
+		super().__setattr__('_UserDict__dict', {})
 		if (dict is not None): self.update(dict)
 		if (kwargs): self.update(kwargs)
 
+	def __len__(self):
+		return len(self.__dict)
+
 	def __getitem__(self, x):
-		r = super().__getitem__(x)
+		return self.__dict[x]
+
+	def __setitem__(self, k, v):
+		self.__dict[k] = v
+
+	def __delitem__(self, x):
+		del self.__dict[x]
+
+	def __iter__(self):
+		return iter(self.__dict)
+
+	def __contains__(self, x):
+		return (x in self.__dict)
+
+	def __repr__(self):
+		return repr(self.__dict)
+
+	def __or__(self, other):
+		if (isinstance(other, UserDict)): return self.__class__(self.__dict | other.__dict)
+		elif (isinstance(other, dict)): return self.__class__(self.__dict | other)
+		else: return NotImplemented
+
+	def __ror__(self, other):
+		if (isinstance(other, UserDict)): return self.__class__(other.__dict | self.__dict)
+		elif (isinstance(other, dict)): return self.__class__(other | self.__dict)
+		else: return NotImplemented
+
+	def __ior__(self, other):
+		if (isinstance(other, UserDict)): self.__dict.update(other.__dict)
+		else: self.__dict.update(other)
+		return self
+
+	def copy(self):
+		return self.__class__.of(self.__dict.copy())
+
+	@property
+	def __dict__(self):
+		return self.__dict
+
+	@classmethod
+	def fromkeys(cls, iterable, value=None):
+		d = cls()
+		for k in iterable:
+			d[k] = value
+		return d
+
+	@classonlymethod
+	def of(cls, data: dict):
+		d = cls()
+		super().__setattr__(d, '_UserDict__dict', data)
+		return d
+
+class AttrDict(UserDict):
+	__slots__ = ()
+
+	def __getitem__(self, x):
+		try: r = super().__getitem__(x)
+		except KeyError:
+			try: __missing__ = self.__class__.__missing__
+			except AttributeError:
+				raise KeyError(x)
+			else: r = __missing__(self, x)
+
 		if (isinstance(r, dict) and not isinstance(r, AttrDict)): return AttrDict.of(r)
 		else: return r
 
 	def __getattr__(self, x):
-		d = self.__getattribute__('data')
-		try: return getattr(d, x)
+		try: return super().__getattribute__(x)
 		except AttributeError as ex:
 			try: return self[x]
 			except KeyError as ex: e = ex
+
 		e.__suppress_context__ = True
 		raise AttributeError(*e.args) from e.with_traceback(None)
 
 	def __setattr__(self, k, v):
-		self.__setitem__(k, v)
+		self[k] = v
 
 	def __delattr__(self, x):
-		self.__delitem__(x)
-
-	@classmethod
-	def of(cls, data: dict):
-		d = cls()
-		super().__setattr__(d, 'data', data)
-		return d
+		del self[x]
 
 class DefaultAttrDict(AttrDict):
 	__slots__ = ('default_factory',)
@@ -1861,7 +2025,6 @@ def apcmd(*args, **kwargs):
 		if (hasattr(f, '_argdefs')):
 			for args, kwargs in f._argdefs:
 				subparser.add_argument(*args, **kwargs)
-			f = f._f
 		subparser.set_defaults(func=f)
 		return f
 	return decorator
@@ -1869,17 +2032,9 @@ def apcmd(*args, **kwargs):
 def aparg(*args, **kwargs):
 	@funcdecorator(suppresstb=False)
 	def decorator(f):
-		if (not hasattr(f, '_argdefs')):
-			of = f
-			@suppress_tb
-			def f(cargs):
-				for args, kwargs in f._argdefs:
-					argparser.add_argument(*args, **kwargs)
-				cargs = argparser.parse_args()
-				return of(cargs)
-			f._argdefs = collections.deque()
-			f._f = of
-		f._argdefs.appendleft((args, kwargs))
+		try: argdefs = f._argdefs
+		except AttributeError: argdefs = f._argdefs = collections.deque()
+		argdefs.appendleft((args, kwargs))
 		return f
 	return decorator
 
@@ -2239,13 +2394,6 @@ def _Sexcepthook_install():
 		sys.excepthook = Sexcepthook
 Sexcepthook.install = _Sexcepthook_install
 if (sys.stderr.isatty()): Sexcepthook.install()
-
-try: pygments
-except ModuleNotFoundError: pass
-else: import pygments.lexers, pygments.formatters
-
-#@dispatch
-def highlight(s: str): return pygments.highlight(s, pygments.lexers.PythonLexer(), pygments.formatters.TerminalFormatter(bg='dark'))
 
 def getsrc(x, *, color=True, clear_term=True, ret=False):
 	if (clear_term): clear()
