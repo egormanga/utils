@@ -1274,15 +1274,15 @@ class Progress:
 
 		l = self.l(add_base) if (self._pool is None) else max(i.l(add_base) for i in self._pool.p)
 		fstr = self.prefix+('%s/%s (%d%%%s) ' if (not self.fixed) else f"%{l}s/%-{l}s (%-3d%%%s) ")
-		r = fstr % (*((cv, self.mv) if (not add_base) else (self.format_base(i, base=add_base) for i in (cv, self.mv))), cv*100//self.mv, ', '+self.format_speed_eta(cv, self.mv, time.time()-self.started, fixed=self.fixed, add_base=add_base) if (add_speed_eta) else '')
-		return r+self.format_bar(cv, self.mv, width-len(r), chars=self.chars, border=self.border, fill=self.fill)
+		r = fstr % (*((cv, self.mv) if (not add_base) else (self.format_base(i, base=add_base) for i in (cv, self.mv))), (cv*100//self.mv if (self.mv) else 0), ', '+self.format_speed_eta(cv, self.mv, time.time()-self.started, fixed=self.fixed, add_base=add_base) if (add_speed_eta) else '')
+		return (r + self.format_bar(cv, self.mv, width-len(r), chars=self.chars, border=self.border, fill=self.fill))
 
 	@staticmethod
 	def format_bar(cv, mv, width, *, chars=' ▏▎▍▌▋▊▉█', border='│', fill=' '):
 		cv = max(0, min(mv, cv))
 		d = 100/(width-2)
-		fp, pp = divmod(cv*100/d, mv)
-		pb = chars[-1]*int(fp) + chars[int(pp*len(chars)//mv)]*(cv != mv)
+		fp, pp = (divmod(cv*100/d, mv) if (mv) else (0, 0))
+		pb = chars[-1]*int(fp) + (chars[int(pp*len(chars)//mv)]*(cv != mv) if (mv) else '')
 		return f"{border}{pb.ljust(width-2, fill)}{border}"
 
 	@classmethod
