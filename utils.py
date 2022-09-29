@@ -176,6 +176,7 @@ argparser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
 loglevel = (cargs.v or 0)-(cargs.q or 0)
 
 # TODO: types.*
+dict_keys, dict_values, dict_items = type({}.keys()), type({}.values()), type({}.items())
 function = types.FunctionType
 builtin_function_or_method = types.BuiltinFunctionType
 method = types.MethodType
@@ -221,7 +222,7 @@ def export(x):
 	return x
 def suppress_tb(f): f.__code__ = code_with(f.__code__, name=f.__qualname__, firstlineno=0, **{'linetable' if (sys.version_info >= (3, 10)) else 'lnotab': b''}); return f
 
-def terminal_link(link, text=None): return f"\033]8;;{Sstr(link).noesc()}\033\\{text if (text is not None) else link}\033]8;;\033\\"
+def terminal_link(link, text=None): return f"\033]8;;{Sstr(link).noesc().fit(1634, bytes=True)}\033\\{text if (text is not None) else link}\033]8;;\033\\"
 
 try: pygments
 except ModuleNotFoundError: pass
@@ -475,8 +476,11 @@ class Sstr(S_type, str):
 	def __or__(self, x):
 		return self if (self.strip()) else x
 
-	def fit(self, l, *, end='…'):
-		return Sstr(self if (len(self) <= l) else self[:l-len(end)]+end if (l >= len(end)) else '')
+	def fit(self, l, *, end='…', bytes=False):
+		enc = self.encode()
+		end_enc = end.encode()
+		if (bytes): return Sstr(self if (len(enc) <= l) else enc[:l-len(end_enc)].decode(errors='ignore')+end if (l >= len(end_enc)) else '')
+		else: return Sstr(self if (len(self) <= l) else self[:l-len(end)]+end if (l >= len(end)) else '')
 
 	def cyclefit(self, l, n, *, sep=' '*8, start_delay=0, **kwargs):
 		if (len(self) <= l): return self
@@ -729,6 +733,8 @@ class dispatch:
 		elif (isinstance(t, (types.UnionType, typing._UnionGenericAlias))): # TODO FIXME: typing_inspect.is_optional_type()?
 			if (not any(cls.__typecheck(o, i) for i in typing.get_args(t))): return False
 			else: return True
+		elif (typing_inspect.is_literal_type(t)): # TODO FIXME: broaden the case
+			return (o in typing.get_args(t))
 		else:
 			if (not isinstance(o, typing_inspect.get_origin(t) or t)): return False
 
@@ -1041,7 +1047,7 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	try: lc = logcolor[l]
 	except (TypeError, IndexError): lc = ''
 	if (ll is None): ll = f'[\033[1m{lc}LV{l}\033[0;96m]' if (l is not None) else ''
-	logstr = f"\033[K\033[96m{time.strftime('[%x %X] ', tm) if (tm) else ''}\033[0;96m{ll}\033[0;1m{' '*bool(ll)+x if (x != '') else ''}\033[0m{end}" if (not raw) else str(x)+end
+	logstr = f"\033[K\033[96m{tm if (isinstance(tm, str)) else time.strftime('[%x %X] ', tm) if (tm) else ''}\033[0;96m{ll}\033[0;1m{' '*bool(ll)+x if (x != '') else ''}\033[0m{end}" if (not raw) else str(x)+end
 	if (unlock and not loglock.empty()):
 		ul = list()
 		for i in iter_queue(loglock):
@@ -1055,7 +1061,7 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	if (not nolog and (l or 0) <= loglevel): logoutput.write(logstr); logoutput.flush()
 	return clearstr
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
-def _dlog(*args, **kwargs): parseargs(kwargs, ll='\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m', tm=''); return log(*args, **kwargs)
+def _dlog(*args, prefix='', **kwargs): parseargs(kwargs, ll=f"\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m{prefix}", tm=''); return log(*args, **kwargs)
 def dlog(*args, **kwargs): return _dlog(*map(str, args), **kwargs)
 def dplog(*args, **kwargs): parseargs(kwargs, format=True, sep='\n'); return _dlog(*args, **kwargs)
 def rlog(*args, **kwargs): parseargs(kwargs, raw=True); return log(*args, **kwargs)
@@ -1090,7 +1096,7 @@ _exc_handlers = set()
 def register_exc_handler(f): _exc_handlers.add(f)
 _logged_exceptions = set()
 @dispatch
-def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=False, _caught=True):
+def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=False, _dlog=False, _caught=True, **kwargs):
 	""" Log an exception.
 	Parameters:
 		ex: exception to log.
@@ -1102,12 +1108,23 @@ def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=Fal
 	if (once):
 		if (repr(ex) in _logged_exceptions): return
 		_logged_exceptions.add(repr(ex))
-	e = log(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+ex.__class__.__qualname__+(' on line '+' -> '.join(terminal_link(f'file://{socket.gethostname()}'+os.path.realpath(i[0].f_code.co_filename) if (os.path.exists(i[0].f_code.co_filename)) else i[0].f_code.co_filename, i[1]) for i in traceback.walk_tb(ex.__traceback__) if i[1])).rstrip(' on line')+'\033[0m'+(': '+str(ex))*bool(str(ex))+('\033[0;2m; ('+str(extra)+')\033[0m' if (extra is not None) else ''), raw=raw)
+	e = (dlog if (_dlog) else log)(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+ex.__class__.__qualname__+(' on line '+' -> '.join(terminal_link(f'file://{socket.gethostname()}'+os.path.realpath(i[0].f_code.co_filename) if (os.path.exists(i[0].f_code.co_filename)) else i[0].f_code.co_filename, i[1]) for i in traceback.walk_tb(ex.__traceback__) if i[1])).rstrip(' on line')+'\033[0m'+(': '+str(ex))*bool(str(ex))+('\033[0;2m; ('+str(extra)+')\033[0m' if (extra is not None) else ''), raw=raw, **kwargs)
 	if (nolog): return
 	for i in _exc_handlers:
 		try: i(e, ex)
 		except Exception: pass
 def logexception(*args, **kwargs): return exception(*args, **kwargs, _caught=False)
+def dlogexception(*args, **kwargs): return logexception(*args, **kwargs, _dlog=True)
+
+@funcdecorator
+def dcall(f):
+	def decorated(*args, **kwargs):
+		fcall = f"{f.__name__}({', '.join((*map(repr, args), *(f'{k}={repr(v)}' for k, v in kwargs.items())))})"
+		dlog(f"→ {fcall}", end='\n\n')
+		try: r = f(*args, **kwargs)
+		except Exception as ex: dlogexception(ex, prefix=f"\033[39m × {fcall}\n", end='\n\n'); raise
+		else: dlog(f"← {fcall} -> {repr(r)}", end='\n\n'); return r
+	return decorated
 
 def raise_(ex): raise ex
 
@@ -1583,6 +1600,13 @@ def last(l):
 	while (True):
 		try: r = next(l)
 		except StopIteration: return r
+def only(l):
+	i = iter(l)
+	try: return next(i)
+	finally:
+		try: next(i)
+		except StopIteration: pass
+		else: raise StopIteration("Only a single value expected")
 
 def pm(x): return 1 if (x) else -1
 def constrain(x, lb, ub): return min(ub, max(lb, x))
@@ -1976,7 +2000,7 @@ class MetaBuilder(type):
 class SlotsOnlyMeta(type):
 	def __new__(metacls, name, bases, classdict):
 		annotations = get_annotations(classdict)
-		slots = classdict['__slots__'] = tuple(k for k, v in annotations.items() if not (isinstance(p := classdict.get(k), (property, functools.cached_property)) and (ra := get_annotations(p).get('return')) and ra == v))
+		classdict['__slots__'] = tuple(k for k, v in annotations.items() if not (isinstance(p := classdict.get(k), (property, functools.cached_property)) and (ra := get_annotations(p).get('return')) and ra == v))
 		return super().__new__(metacls, name, bases, classdict)
 class SlotsOnly(metaclass=SlotsOnlyMeta): pass
 class ABCSlotsOnlyMeta(SlotsOnlyMeta, abc.ABCMeta): pass
@@ -1985,15 +2009,25 @@ class ABCSlotsOnly(metaclass=ABCSlotsOnlyMeta): pass
 class SlotsTypecheckMeta(type):
 	def __new__(metacls, name, bases, classdict):
 		annotations = get_annotations(classdict)
+
+		for k, v in classdict.items():
+			if (not isinstance(v, (property, functools.cached_property))): continue
+			try: ra = get_annotations(v)['return']
+			except KeyError: continue
+			if (k in annotations):
+				if ((a := annotations[k]) is not ... and ra != a and not issubclass(typing.get_origin(ra) or ra, typing.get_origin(a) or a)):
+					raise TypeError(f"Specified property type annotation ('{k} -> {format_inspect_annotation(ra)}') is not a subclass of its slot annotation ('{k}: {format_inspect_annotation(a)}')")
+			else: annotations[k] = ra
+
 		for k, (v, c) in functools.reduce(operator.or_, ({k: (v, c)
-		                                                  for k, v in {
-		                                                  	**get_annotations(c),
-		                                                  	**{k: get_annotations(v).get('return')
-		                                                  	   for k, v in vars(c).items()
-		                                                  	   if isinstance(v, (property, functools.cached_property))},
-		                                                  }.items()
+		                                                  for k, v in (get_annotations(c) | {k: get_annotations(v)['return']
+		                                                                                     for k, v in vars(c).items()
+		                                                                                     if isinstance(v, (property, functools.cached_property))
+		                                                                                        and 'return' in get_annotations(v)
+		                                                                                    }).items()
 		                                                 } for c in S((*bases, *(j for i in bases for j in i.mro()))).uniquize()[::-1]), {}).items():
-			if (v is not ... and (a := annotations.get(k)) and not issubclass(typing.get_origin(a) or a, typing.get_origin(v) or v)): raise TypeError(f"Specified slot type annotation (class {name}, '{k}: {format_inspect_annotation(a)}') is not a subclass of its parent's annotation (class {c.__name__}, '{k}: {format_inspect_annotation(v)}')")
+			if (v is not ... and (a := annotations.get(k)) and a != v and not issubclass(typing.get_origin(a) or a, typing.get_origin(v) or v)):
+				raise TypeError(f"Specified slot type annotation (class {name}, '{k}: {format_inspect_annotation(a)}') is not a subclass of its parent's annotation (class {c.__name__}, '{k}: {format_inspect_annotation(v)}')")
 		return super().__new__(metacls, name, bases, classdict)
 class SlotsTypecheck(metaclass=SlotsTypecheckMeta): pass
 class ABCSlotsTypecheckMeta(SlotsTypecheckMeta, abc.ABCMeta): pass
