@@ -1297,10 +1297,11 @@ class Progress:
 	@staticmethod
 	def format_bar(cv, mv, width, *, chars=' ▏▎▍▌▋▊▉█', border='│', fill=' '):
 		cv = max(0, min(mv, cv))
+		if (not isiterablenostr(border)): border = (border, border)
 		d = 100/(width-2)
 		fp, pp = (divmod(cv*100/d, mv) if (mv) else (0, 0))
 		pb = chars[-1]*int(fp) + (chars[int(pp*len(chars)//mv)]*(cv != mv) if (mv) else '')
-		return f"{border}{pb.ljust(width-2, fill)}{border}"
+		return f"{border[0]}{pb.ljust(width-2, fill)}{border[1]}"
 
 	@classmethod
 	def format_speed_eta(cls, cv, mv, elapsed, *, fixed=False, add_base=None):
