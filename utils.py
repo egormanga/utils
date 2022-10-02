@@ -2148,6 +2148,12 @@ class noopf:
 		return False
 @singleton
 class noopcm:
+	def __repr__(self):
+		return 'noopcm'
+
+	def __bool__(self):
+		return False
+
 	def __enter__(*_):
 		pass
 
