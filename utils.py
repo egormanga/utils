@@ -206,10 +206,9 @@ def try_eval(*args, **kwargs):
 	except Exception: return None
 def safeexec():
 	try:
-		sys.stderr.write('\033[2m>>> ')
-		sys.stderr.flush()
+		print(end='\033[2m>>> ', file=sys.stderr, flush=True)
 		return exec(sys.stdin.readline())
-	finally: sys.stderr.write('\033[0m')
+	finally: print(end='\033[0m', file=sys.stderr, flush=True)
 def export(x):
 	globals = inspect.stack()[1][0].f_globals
 	all = globals.setdefault('__all__', [])
@@ -973,7 +972,7 @@ def allslots(cls: type):
 	""" Get slots tuple for all the MRO of class `cls' in right («super-to-sub») order. """
 	return tuple(j for i in cls.mro()[::-1] if hasattr(i, '__slots__') for j in i.__slots__)
 @dispatch
-def allslots(obj): return allannotations(type(obj))
+def allslots(obj): return allslots(type(obj))
 
 def spreadargs(f, okwargs, *args, **akwargs):
 	fsig = inspect.signature(f)
@@ -1055,10 +1054,8 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 			ul.append(i)
 		for i in ul[::-1]:
 			log(*i[0], **i[1])
-	if (logfile and not nofile):
-		logfile.write(logstr)
-		if (flush): logfile.flush()
-	if (not nolog and (l or 0) <= loglevel): logoutput.write(logstr); logoutput.flush()
+	if (logfile and not nofile): print(logstr, end='', file=logfile, flush=flush)
+	if (not nolog and (l or 0) <= loglevel): print(logstr, end='', file=logoutput, flush=True)
 	return clearstr
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
 def _dlog(*args, prefix='', **kwargs): parseargs(kwargs, ll=f"\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m{prefix}", tm=''); return log(*args, **kwargs)
@@ -1279,19 +1276,21 @@ class Progress:
 		self.printed = bool()
 		self.started = None
 
-	def __del__(self):
-		try:
-			if (self.printed and self._pool is None and sys.stderr.isatty()): sys.stderr.write('\n')
-		except AttributeError: pass
+	def __enter__(self):
+		self.started = time.time()
+		return self
+
+	def __exit__(self, exc_type, exc, tb):
+		if (self.printed and self._pool is None and sys.stderr.isatty()): print(file=sys.stderr, flush=True)
 
 	def format(self, cv, width, *, add_base=None, add_speed_eta=None):
 		if (add_base is None): add_base = self.add_base
 		if (add_speed_eta is None): add_speed_eta = self.add_speed_eta
-		if (self.started is None or not cv): self.started = time.time(); add_speed_eta = False
+		if (self.started is None or not cv): add_speed_eta = False
 
 		l = self.l(add_base) if (self._pool is None) else max(i.l(add_base) for i in self._pool.p)
 		fstr = self.prefix+('%s/%s (%d%%%s) ' if (not self.fixed) else f"%{l}s/%-{l}s (%-3d%%%s) ")
-		r = fstr % (*((cv, self.mv) if (not add_base) else (self.format_base(i, base=add_base) for i in (cv, self.mv))), (cv*100//self.mv if (self.mv) else 0), ', '+self.format_speed_eta(cv, self.mv, time.time()-self.started, fixed=self.fixed, add_base=add_base) if (add_speed_eta) else '')
+		r = fstr % (*((cv, self.mv) if (not add_base) else (self.format_base(i, base=add_base) for i in (cv, self.mv))), (cv*100//self.mv if (self.mv) else 0), ', '+self.format_speed_eta(cv, self.mv, (time.time() - self.started), fixed=self.fixed, add_base=add_base) if (add_speed_eta) else '')
 		return (r + self.format_bar(cv, self.mv, width-len(r), chars=self.chars, border=self.border, fill=self.fill))
 
 	@staticmethod
@@ -1334,8 +1333,7 @@ class Progress:
 			try: width = os.get_terminal_size(sys.stderr.fileno())[0]
 			except OSError: pass
 		if (width is None): return
-		out.write('\033[K'+self.format(cv, width=width)+'\r')
-		if (flush): out.flush()
+		print('\033[K' + self.format(cv, width=width), end='\r', file=out, flush=flush)
 		self.printed = (out is sys.stderr)
 
 	def l(self, add_base):
@@ -1355,20 +1353,22 @@ class ProgressPool:
 		self.p, self.kwargs = [Progress(-1, **parseargs(kwargs, fixed=True), _pool=self) for _ in range(n)], kwargs
 		self.ranges = list()
 
-	def __del__(self):
-		if (sys.stderr.isatty()):
-			sys.stderr.write('\033[J')
-			sys.stderr.flush()
+	def __enter__(self):
+		self.started = time.time()
+		return self
+
+	def __exit__(self, exc_type, exc, tb):
+		if (self.printed and sys.stderr.isatty()): print(end='\033[J', file=sys.stderr, flush=True)
 
 	def print(self, *cvs, width=None):
 		if (not sys.stderr.isatty()): return
 
 		ii = None
 		for ii, (p, cv) in enumerate(zip(self.p, cvs)):
-			if (ii): sys.stderr.write('\n')
+			if (ii): print(file=sys.stderr, flush=True)
 			p.print(cv, width=width)
-		if (ii): sys.stderr.write(f"\033[{ii}A")
-		sys.stderr.flush()
+		if (ii): print(end=f"\033[{ii}A", file=sys.stderr, flush=True)
+		self.printed = True
 
 	def range(self, start, stop=None, step=1, **kwargs):
 		if (stop is None): start, stop = 0, start
@@ -1408,10 +1408,11 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 
 	def __enter__(self):
 		self.start()
-		return self
+		return super().__enter__()
 
-	def __exit__(self, type, value, tb):
+	def __exit__(self, exc_type, exc, tb):
 		self.stop()
+		super().__exit__(exc_type, exc, tb)
 
 	def run(self):
 		while (not self.stopped):
@@ -1437,18 +1438,16 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 	def stop(self):
 		self.stopped = True
 		self.join()
-		if (sys.stderr.isatty()):
-			sys.stderr.write('\r\033[K')
-			sys.stderr.flush()
+		if (sys.stderr.isatty()): print(end='\r\033[K', file=sys.stderr, flush=True)
 
 def progrange(start, stop=None, step=1, **kwargs):
 	parseargs(kwargs, fixed=True)
 	if (stop is None): start, stop = 0, start
-	p = Progress(stop-start, **kwargs)
-	for i in range(start, stop, step):
-		p.print(i-start)
-		yield i
-	p.print(stop)
+	with Progress(stop-start, **kwargs) as p:
+		for i in range(start, stop, step):
+			p.print(i-start)
+			yield i
+		p.print(stop)
 
 @dispatch
 def progiter(iterator: typing.Iterator, l: int): # TODO: why yield?
@@ -1461,10 +1460,10 @@ def progiter(iterable: typing.Iterable):
 
 def testprogress(n=1000, sleep=0.002, **kwargs):
 	parseargs(kwargs, fixed=True)
-	p = Progress(n, **kwargs)
-	for i in range(n+1):
-		p.print(i)
-		time.sleep(sleep)
+	with Progress(n, **kwargs) as p:
+		for i in range(n+1):
+			p.print(i)
+			time.sleep(sleep)
 
 class NodesTree:
 	chars = '┌├└─│╾╼'
@@ -1475,7 +1474,7 @@ class NodesTree:
 
 	def print(self, out=sys.stdout, **fmtkwargs):
 		parseargs(fmtkwargs, color=out.isatty())
-		out.write(self.format(**fmtkwargs)+'\n')
+		print(self.format(**fmtkwargs), file=out, flush=True)
 
 	def format(self, **fmtkwargs):
 		parseargs(fmtkwargs, root=True)
@@ -1493,7 +1492,7 @@ class NodesTree:
 
 class TaskTree(NodesTree):
 	class Task:
-		__slots__ = ('title', 'state', 'subtasks')
+		__slots__ = ('title', 'state', 'subtasks', 'printed')
 
 		def __init__(self, title, subtasks=None):
 			self.title, self.subtasks = str(title), subtasks if (subtasks is not None) else []
@@ -1502,19 +1501,21 @@ class TaskTree(NodesTree):
 	def __init__(self, x, **kwargs):
 		self.tree = x
 		self.l = len(tuple(self.format_node(self.tree, root=True, **kwargs)))
+		self.printed = bool()
 
-	def __del__(self):
-		if (sys.stderr.isatty()):
-			sys.stderr.write('\n'*self.l)
-			sys.stderr.flush()
+	def __enter__(self):
+		return self
+
+	def __exit__(self, exc_type, exc, tb):
+		if (self.printed and sys.stderr.isatty()): print(end='\n'*self.l, file=sys.stderr, flush=True)
 
 	def print(self, **fmtkwargs):
 		if (not sys.stderr.isatty()): return
 
-		sys.stderr.write('\033[J')
-		sys.stderr.write('\n'.join(x+' '+self.format_task(y) for x, y in self.format_node(self.tree, root=True, **fmtkwargs)))
-		sys.stderr.write(f"\r\033[{self.l-1}A")
-		sys.stderr.flush()
+		print(end='\033[J', file=sys.stderr)
+		print(*(x+' '+self.format_task(y) for x, y in self.format_node(self.tree, root=True, **fmtkwargs)), sep='\n', end=f"\r\033[{self.l-1}A", file=sys.stderr, flush=True)
+
+		self.printed = True
 
 	def format_node(self, node, indent=2, color=False, *, root=False):
 		chars = self.colorchars if (color) else self.chars
@@ -1680,16 +1681,16 @@ class timecounter:
 
 	def __enter__(self):
 		if (self is timecounter): self = type(self)()
-		self.started = time.time()
+		self.started = time.perf_counter()
 		return self
 
 	def __exit__(self, type, value, tb):
-		self.ended = time.time()
+		self.ended = time.perf_counter()
 
 	def time(self):
 		if (self.started is None): return 0
-		if (self.ended is None): return time.time()-self.started
-		return self.ended-self.started
+		if (self.ended is None): return (time.perf_counter() - self.started)
+		return (self.ended - self.started)
 
 class classonlymethod:
 	__slots__ = ('__func__',)
@@ -2620,7 +2621,7 @@ class _CStream: # because I can.
 		self.ofd = ofd
 
 	def __repr__(self):
-		return '\033[F' if (sys.flags.interactive) else super().__repr__()
+		return ('\033[F' if (sys.flags.interactive) else super().__repr__())
 class IStream(_CStream):
 	def __rshift__(self, x):
 		globals = inspect.stack()[1][0].f_globals
@@ -2628,8 +2629,7 @@ class IStream(_CStream):
 		return self
 class OStream(_CStream):
 	def __lshift__(self, x):
-		self.ofd.write(str(x))
-		if (x is endl): self.ofd.flush()
+		print(x, end='', file=self.ofd, flush=(x is endl))
 		return self
 class IOStream(IStream, OStream): pass
 cin = IStream(sys.stdin)
@@ -2648,7 +2648,7 @@ def exit(c=None, code=None, raw=False, nolog=None):
 	if (nolog is None): nolog = not any(_logged_start)
 		#name = inspect.stack()[1][0].f_globals.get('__name__')
 		#nolog = not (name is not None and _logged_start.get(name))
-	if (not nolog and sys.stderr.isatty()): sys.stderr.write('\r\033[K')
+	if (not nolog and sys.stderr.isatty()): print('\r\033[K', file=sys.stderr, flush=True)
 	unlocklog()
 	db.save(nolog=True)
 	if (not nolog): log(f'{c}' if (raw) else f'Exit: {c}' if (c and type(c) == str or hasattr(c, 'args') and c.args) else 'Exit.')
