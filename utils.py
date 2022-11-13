@@ -99,7 +99,7 @@ _imports = (
 	'keyword',
 	'marshal',
 	'numbers',
-	'os.path',
+	'secrets',
 	'termios',
 	'urllib3',
 	'zipfile',
@@ -188,6 +188,7 @@ NoneType = type(None)
 inf = float('inf')
 nan = float('nan')
 nl = endl = NL = ENDL = '\n'
+tab = TAB = '\t'
 
 def isiterable(x): return isinstance(x, typing.Iterable)
 def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
@@ -873,6 +874,8 @@ def tohashable(l: typing.Iterable): return tuple(map(tohashable, l))
 def tohashable(x: typing.Hashable): return x
 
 class cachedfunction:
+	__slots__ = ('__wrapped__', '_cached', '_obj')
+
 	class _noncached:
 		__slots__ = ('value',)
 
@@ -880,7 +883,7 @@ class cachedfunction:
 			self.value = value
 
 	def __init__(self, f):
-		self.f = f
+		self.__wrapped__ = f
 		self._cached = dict()
 		self._obj = None
 
@@ -892,14 +895,14 @@ class cachedfunction:
 		if (self._obj is not None): args = (self._obj, *args)
 		k = tohashable((args, kwargs))
 		if (k not in self._cached):
-			r = self.f(*args, **kwargs)
+			r = self.__wrapped__(*args, **kwargs)
 			if (not isinstance(r, self._noncached)): self._cached[k] = r
 			else: return r.value
 		return self._cached[k]
 
 	def nocache(self, *args, **kwargs):
 		if (self._obj is not None): args = (self._obj, *args)
-		return self.f(*args, **kwargs)
+		return self.__wrapped__(*args, **kwargs)
 
 	def is_cached(self, *args, **kwargs):
 		if (self._obj is not None): args = (self._obj, *args)
@@ -928,12 +931,14 @@ except AttributeError:
 		class _empty: __slots__ = ()
 		_empty = _empty()
 
+		__slots__ = ('__wrapped__',)
+
 		def __init__(self, f):
-			self.f = f
+			self.__wrapped__ = f
 			self._cached = self._empty
 
 		def __get__(self, obj, objcls):
-			if (self._cached is self._empty): self._cached = self.f(obj)
+			if (self._cached is self._empty): self._cached = self.__wrapped__(obj)
 			return self._cached
 
 		def clear_cache(self):
@@ -1352,6 +1357,7 @@ class ProgressPool:
 		#self.__init__(*(Progress(-1, **kwargs, _pool=self) for _ in range(n)), **kwargs)
 		self.p, self.kwargs = [Progress(-1, **parseargs(kwargs, fixed=True), _pool=self) for _ in range(n)], kwargs
 		self.ranges = list()
+		self.printed = bool()
 
 	def __enter__(self):
 		self.started = time.time()
@@ -1693,51 +1699,60 @@ class timecounter:
 		return (self.ended - self.started)
 
 class classonlymethod:
-	__slots__ = ('__func__',)
+	__slots__ = ('__wrapped__',)
 
 	def __init__(self, f):
-		self.__func__ = f
+		self.__wrapped__ = f
 
 	@suppress_tb
 	def __get__(self, obj, cls=None):
-		if (obj is not None): raise AttributeError(f"'{cls.__name__}.{self.__func__.__name__}()' is a class-only method.")
-		return functools.partial(self.__func__, cls)
+		if (obj is not None): raise AttributeError(f"'{cls.__name__}.{self.__wrapped__.__name__}()' is a class-only method.")
+		return functools.partial(self.__wrapped__, cls)
 
 class classproperty:
-	__slots__ = ('__func__',)
+	__slots__ = ('__wrapped__',)
 
 	def __init__(self, f):
-		self.__func__ = f
+		self.__wrapped__ = f
 
 	def __get__(self, obj, cls):
-		return self.__func__(cls)
+		return self.__wrapped__(cls)
+
+class instanceproperty:
+	__slots__ = ('__wrapped__',)
+
+	def __init__(self, f):
+		self.__wrapped__ = f
+
+	def __get__(self, obj, cls):
+		return self.__wrapped__(obj or cls)
 
 class attrget:
-	__slots__ = ('f',)
+	__slots__ = ('__wrapped__',)
 
 	class getter:
-		__slots__ = ('obj', 'f')
+		__slots__ = ('obj', '__wrapped__')
 
 		def __init__(self, obj, f):
-			self.obj, self.f = obj, f
+			self.obj, self.__wrapped__ = obj, f
 
 		def __getattr__(self, x):
-			return self.f(self.obj, x)
+			return self.__wrapped__(self.obj, x)
 
 	def __init__(self, f):
-		self.f = f
+		self.__wrapped__ = f
 
 	def __get__(self, obj, cls):
-		return self.getter(obj, self.f)
+		return self.getter(obj, self.__wrapped__)
 
 class itemget:
-	__slots__ = ('f', '__call__', '_bool')
+	__slots__ = ('__wrapped__', '__call__', '_bool')
 
 	class getter:
-		__slots__ = ('obj', 'f')
+		__slots__ = ('obj', '__wrapped__')
 
 		def __init__(self, obj, f):
-			self.obj, self.f = obj, f
+			self.obj, self.__wrapped__ = obj, f
 
 		def __contains__(self, x):
 			try: self[x]
@@ -1745,16 +1760,16 @@ class itemget:
 			else: return True
 
 		def __getitem__(self, x):
-			return self.f(self.obj, *(x if (isinstance(x, tuple)) else (x,)))
+			return self.__wrapped__(self.obj, *(x if (isinstance(x, tuple)) else (x,)))
 
 	@dispatch
 	def __init__(self, *, bool: function):
 		self._bool = bool
-		self.__call__ = lambda f: each[setattr(self, 'f', f), delattr(self, '__call__')]
+		self.__call__ = lambda f: each[setattr(self, '__wrapped__', f), delattr(self, '__call__')]
 
 	@dispatch
 	def __init__(self, f):
-		self.f = f
+		self.__wrapped__ = f
 
 	def __bool__(self):
 		try: f = self._bool
@@ -1762,29 +1777,29 @@ class itemget:
 		else: return f(self.obj)
 
 	def __get__(self, obj, cls):
-		return self.getter(obj, self.f)
+		return self.getter(obj, self.__wrapped__)
 
 class classitemget(itemget):
-	__slots__ = ('f',)
+	__slots__ = ('__wrapped__',)
 
 	def __init__(self, f):
-		self.f = f
+		self.__wrapped__ = f
 
 	def __get__(self, obj, cls):
-		return self.getter(cls, self.f)
+		return self.getter(cls, self.__wrapped__)
 
 class staticitemget:
-	__slots__ = ('f', '_fkeys')
+	__slots__ = ('__wrapped__', '_fkeys')
 
 	def __init__(self, f):
-		self.f = f
+		self.__wrapped__ = f
 		self._fkeys = lambda self: ()
 
 	def __iter__(self):
 		raise ValueError("staticitemget is not iterable")
 
 	def __getitem__(self, x):
-		return self.f(*x) if (isinstance(x, tuple)) else self.f(x)
+		return (self.__wrapped__(*x) if (isinstance(x, tuple)) else self.__wrapped__(x))
 
 	def __contains__(self, x):
 		if (x in self.keys()): return True
@@ -1793,7 +1808,7 @@ class staticitemget:
 		else: return True
 
 	def __call__(self, *args, **kwargs):
-		return self.f(*args, **kwargs)
+		return self.__wrapped__(*args, **kwargs)
 
 	def fkeys(self, f):
 		self._fkeys = f
@@ -1803,16 +1818,16 @@ class staticitemget:
 		return self._fkeys(self)
 
 class staticattrget:
-	__slots__ = ('f',)
+	__slots__ = ('__wrapped__',)
 
 	def __init__(self, f):
-		self.f = f
+		self.__wrapped__ = f
 
 	def __getattr__(self, x):
-		return self.f(x)
+		return self.__wrapped__(x)
 
 	def __call__(self, *args, **kwargs):
-		return self.f(*args, **kwargs)
+		return self.__wrapped__(*args, **kwargs)
 
 class AttrView:
 	def __init__(self, obj):
@@ -2030,6 +2045,7 @@ class SlotsTypecheckMeta(type):
 		                                                 } for c in S((*bases, *(j for i in bases for j in i.mro()))).uniquize()[::-1]), {}).items():
 			if (v is not ... and (a := annotations.get(k)) and a != v and not issubclass(typing.get_origin(a) or a, typing.get_origin(v) or v)):
 				raise TypeError(f"Specified slot type annotation (class {name}, '{k}: {format_inspect_annotation(a)}') is not a subclass of its parent's annotation (class {c.__name__}, '{k}: {format_inspect_annotation(v)}')")
+
 		return super().__new__(metacls, name, bases, classdict)
 class SlotsTypecheck(metaclass=SlotsTypecheckMeta): pass
 class ABCSlotsTypecheckMeta(SlotsTypecheckMeta, abc.ABCMeta): pass
@@ -2046,9 +2062,9 @@ class TypeInitMeta(SlotsTypecheckMeta):
 		def __init__(self, *args, **kwargs):
 			for k, v in get_annotations(cls).items():
 				if (v is ... or isinstance(v, str)): continue
-				if (isinstance(p := getattr(cls, k, None), (property, functools.cached_property))): continue
+				if (isinstance(getattr(cls, k, None), (property, functools.cached_property))): continue
 				try: object.__getattribute__(self, k)
-				except AttributeError: object.__setattr__(self, k, v() if (isinstance(v, (type, function, method))) else v)
+				except AttributeError: object.__setattr__(self, k, (v() if (isinstance(v, (type, function, method))) else v))
 			__init_o__(self, *args, **kwargs)
 
 		cls.__init__ = __init__
@@ -2485,7 +2501,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 					hline = hline.replace(r';00m', rf";00;{hc}m") # TODO FIXME \033
 				print(hline.rstrip().expandtabs(4), end='\033[0m\n', file=_file) #'\033[0m'+ # XXX?
 		else:
-			if (lines == lastlines): repeated += 1 # TODO FIXME: scope
+			#if (lines == lastlines): repeated += 1 # TODO FIXME XXX: scope
 			if (lines != lastlines or repeated <= 1):
 				if ((lines or lineno > 0) and not lastlines and _linesep is not None): print(end=_linesep, file=_file)
 				print("    \033[2m..."+('\033[0m'*bool(lines or lineno > 0))+f"in \033[93m{name}\033[0m{':'*bool(lines)}", file=_file)
