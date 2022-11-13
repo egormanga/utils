@@ -15,73 +15,54 @@ else: logimported()
 
 """
 
-import inspect
-from pprint import pprint, pformat
+import sys, queue, regex, types, inspect, argparse, pygments, readline, warnings, typing_inspect
 
-module = type(inspect)
+py_version = f"Python {sys.version.split(maxsplit=1)[0]}"
+__repl__ = bool(getattr(sys, 'ps1', sys.flags.interactive))
 
-class ModuleProxy(module):
-	__slots__ = ('_as',)
-
-	def __init__(self, name, as_=None):
-		self.__name__, self._as = name, as_ or name
+class ModuleProxy(types.ModuleType):
+	def __init__(self, name):
+		self.__name__ = name
 
 	def __getattribute__(self, x):
-		module = __import__(object.__getattribute__(self, '__name__'))
-		try: inspect.stack()[1][0].f_globals[object.__getattribute__(self, '_as')] = module
+		module = __import__(name := object.__getattribute__(self, '__name__'))
+		try: inspect.stack()[1].frame.f_globals[name] = module
 		except (TypeError, IndexError): pass
+		if (module.__name__ not in {*sys.stdlib_module_names, *sys.builtin_module_names} or
+		    any('site-packages' in (getattr(module, i, None) or '') for i in ('__file__', '__path__'))):
+			warnings.warn(f"Using non-standard modules ({module}) through utils is deprecated.", stacklevel=2)
 		return getattr(module, x)
 
-def Simport(x, as_=None):
-	inspect.stack()[1][0].f_globals
-	globals()[as_ or x] = ModuleProxy(x, as_)
-
-_imports = (
-	'io',
-	'os',
+_globals = globals()
+_globals.update(sys.modules)  # no import cost at all, as those are already loaded
+_autoimports = (
 	're',
-	'abc',
 	'ast',
-	'bs4',
 	'cmd',
 	'dis',
 	'pdb',
-	'pip',
 	'pty',
-	'sys',
 	'tty',
-	'bson',
 	'code',
 	'copy',
-	'dill',
 	'glob',
 	'gzip',
 	'html',
 	'http',
 	'json',
 	'math',
-	'stat',
-	'time',
-	'toml',
 	'uuid',
-	'yaml',
 	'zlib',
 	'errno',
-	'queue',
-	'regex',
 	'shlex',
-	'types',
 	'atexit',
 	'base64',
-	'bidict',
 	'bisect',
 	'codeop',
 	'ctypes',
-	'getkey',
 	'locale',
-	#'parser',
 	'pickle',
-	'psutil',
+	'pprint',
 	'random',
 	'select',
 	'shutil',
@@ -92,81 +73,49 @@ _imports = (
 	'typing',
 	'urllib',
 	'asyncio',
-	'aiohttp',
-	'bashlex',
 	'getpass',
 	'hashlib',
-	'keyword',
-	'marshal',
 	'numbers',
 	'secrets',
 	'termios',
-	'urllib3',
 	'zipfile',
-	'aiocache',
-	'aiofiles',
-	'argparse',
-	#'attrdict',
-	'builtins',
 	'datetime',
-	'operator',
 	'platform',
-	'pygments',
-	'readline',
-	'requests',
 	'tempfile',
-	'warnings',
 	'fractions',
-	'functools',
-	'importlib',
 	'ipaddress',
-	'itertools',
 	'linecache',
 	'mimetypes',
-	'netifaces',
-	'pyparsing',
 	'threading',
 	'traceback',
-	'wakeonlan',
-	'contextlib',
 	'subprocess',
-	'collections',
 	'rlcompleter',
 	'unicodedata',
 	'configparser',
-	'setproctitle',
-	'aioprocessing',
-	#'better_exchook',
-	'typing_inspect',
-	'multiprocessing_on_dill as multiprocessing',
+	'multiprocessing',
 	#'nonexistenttest'
 )
-for i in _imports: Simport(*i.split()[::2])
-del i, Simport # TODO FIXME? (inspect.stack() is too slow)
-globals().update(sys.modules)  # TODO: remove from list above?
+
+_globals_ = frozenset(sum((tuple(i.frame.f_globals) for i in inspect.stack()[1:]), start=()))
+#print(_globals_)
+for i in _autoimports:
+	if (i in _globals_): continue
+	if (i in _globals):
+		#warnings.warn(f"redundant autoimport: {i}")
+		continue
+	_globals[i] = ModuleProxy(i)
+del i, _globals
 
 def install_all_imports():
 	r = list()
-	for i in _imports:
+	for i in _autoimports:
 		i = i.partition(' ')[0]
 		if (i in sys.modules): continue
 		try: __import__(i)
 		except ModuleNotFoundError: r.append(i)
-	old_sysargv, sys.argv = sys.argv, ['pip3', 'install']+r
+	old_sysargv, sys.argv = sys.argv, ['pip3', 'install', *r]
 	try: __import__('pkg_resources').load_entry_point('pip', 'console_scripts', 'pip3')()
 	finally: sys.argv = old_sysargv
-
-py_version = 'Python '+sys.version.split(maxsplit=1)[0]
-__repl__ = bool(getattr(sys, 'ps1', sys.flags.interactive))
-
-### [replaced by Sexcepthook]
-#if (sys.stderr.isatty()):
-#	try: better_exchook
-#	except ModuleNotFoundError: pass
-#	else:
-#		sys._oldexcepthook = sys.excepthook
-#		better_exchook.install()
-###
 
 argparser = argparse.ArgumentParser(conflict_handler='resolve', add_help=False)
 argparser.add_argument('-v', action='count', help=argparse.SUPPRESS)
@@ -177,6 +126,7 @@ loglevel = (cargs.v or 0)-(cargs.q or 0)
 
 # TODO: types.*
 dict_keys, dict_values, dict_items = type({}.keys()), type({}.values()), type({}.items())
+module = types.ModuleType
 function = types.FunctionType
 builtin_function_or_method = types.BuiltinFunctionType
 method = types.MethodType
@@ -211,7 +161,7 @@ def safeexec():
 		return exec(sys.stdin.readline())
 	finally: print(end='\033[0m', file=sys.stderr, flush=True)
 def export(x):
-	globals = inspect.stack()[1][0].f_globals
+	globals = inspect.stack()[1].frame.f_globals
 	all = globals.setdefault('__all__', [])
 	if (not isinstance(all, list)): all = globals['__all__'] = list(all)
 	try: name = x.__qualname__
@@ -224,15 +174,8 @@ def suppress_tb(f): f.__code__ = code_with(f.__code__, name=f.__qualname__, firs
 
 def terminal_link(link, text=None): return f"\033]8;;{Sstr(link).noesc().fit(1634, bytes=True)}\033\\{text if (text is not None) else link}\033]8;;\033\\"
 
-try: pygments
-except ModuleNotFoundError: pass
-else: import pygments.lexers, pygments.formatters
-
-#@dispatch
-def highlight(s: str, *, lexer=None, formatter=None):
-	if (lexer is None): lexer = pygments.lexers.PythonLexer()
-	if (formatter is None): formatter = pygments.formatters.TerminalFormatter(bg='dark')
-	return pygments.highlight(s, lexer, formatter)
+import pygments.lexers, pygments.formatters
+def highlight(s: str, *, lexer=pygments.lexers.PythonLexer(), formatter=pygments.formatters.TerminalFormatter(bg='dark')): return pygments.highlight(s, lexer, formatter)
 
 def S(x=None, *, ni_ok=False):
 	""" Convert `x' to an instance of corresponding S-type. """
@@ -1030,9 +973,9 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 		end: print-like line end.
 		ll: formatted string instead of loglevel for output.
 		raw: if true, do not print datetime/loglevel prefix if set.
-		tm: specify datetime, time.time() if not set, nothing if false.
-		format: if true, apply pformat() to args.
-		width: specify output line width for wrapping, autodetect from stderr if not specified.
+		tm: specify datetime; `time.time()' if not set, nothing if false.
+		format: if true, apply `pprint.pformat()' to args.
+		width: specify output line width for wrapping; autodetect from stderr if not specified.
 		unlock: if true, release all previously holded («locked») log messages.
 		flush: if true, flush logfile if written to it.
 		nolog: if true, force suppress printing to stderr.
@@ -1044,7 +987,7 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	if (l is None): l = ''
 	if (type(l) is not int): l, x = None, (l, *x)
 	if (x == ()): l, x = 0, (l,)
-	x = 'plog():\n'*bool(format and not raw)+sep.join(map((lambda x: pformat(x, width=width)) if (format) else str, x))
+	x = 'plog():\n'*bool(format and not raw)+sep.join(map((lambda x: pprint.pformat(x, width=width)) if (format) else str, x))
 	clearstr = Sstr(x).noesc()
 	if (tm is None): tm = time.localtime()
 	if (not unlock and not loglock.empty()): loglock.put(((_l, *_x), dict(sep=sep, end=end, raw=raw, tm=tm, nolog=nolog, nofile=nofile))); return clearstr
@@ -1072,7 +1015,7 @@ def logstart(x):
 	""" from utils[.nolog] import *; logstart(name) """
 	global _logged_start, _logged_utils_start
 	if (_logged_utils_start is None): _logged_utils_start = False; return
-	#if ((name := inspect.stack()[1][0].f_globals.get('__name__')) is not None):
+	#if ((name := inspect.stack()[1].frame.f_globals.get('__name__')) is not None):
 	if (_logged_start.get(x) is True): return
 	_logged_start[x] = True
 	log(x+'\033[0m...', end=' ') #, nolog=(x == 'Utils'))
@@ -1212,7 +1155,7 @@ class DB:
 
 	def register(self, *fields):
 		with self.lock:
-			globals = inspect.stack()[1][0].f_globals
+			globals = inspect.stack()[1].frame.f_globals
 
 			for field in fields:
 				self.fields[field] = (globals, globals.get('__annotations__', {}).get(field, self._empty), globals.get(field, self._empty))
@@ -2640,7 +2583,7 @@ class _CStream: # because I can.
 		return ('\033[F' if (sys.flags.interactive) else super().__repr__())
 class IStream(_CStream):
 	def __rshift__(self, x):
-		globals = inspect.stack()[1][0].f_globals
+		globals = inspect.stack()[1].frame.f_globals
 		globals[x] = type(globals.get(x, ''))(self.ifd.readline().rstrip('\n')) # obviousity? naaooo
 		return self
 class OStream(_CStream):
@@ -2662,7 +2605,7 @@ class NonLoggingException(Exception): pass
 def exit(c=None, code=None, raw=False, nolog=None):
 	global _logged_start
 	if (nolog is None): nolog = not any(_logged_start)
-		#name = inspect.stack()[1][0].f_globals.get('__name__')
+		#name = inspect.stack()[1].frame.f_globals.get('__name__')
 		#nolog = not (name is not None and _logged_start.get(name))
 	if (not nolog and sys.stderr.isatty()): print('\r\033[K', file=sys.stderr, flush=True)
 	unlocklog()
