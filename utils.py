@@ -28,7 +28,7 @@ class ModuleProxy(types.ModuleType):
 		module = __import__(name := object.__getattribute__(self, '__name__'))
 		try: inspect.stack()[1].frame.f_globals[name] = module
 		except (TypeError, IndexError): pass
-		if (module.__name__ not in {*sys.stdlib_module_names, *sys.builtin_module_names} or
+		if (module.__name__ not in {*getattr(sys, 'stdlib_module_names', ()), *sys.builtin_module_names} or
 		    any('site-packages' in (getattr(module, i, None) or '') for i in ('__file__', '__path__'))):
 			warnings.warn(f"Using non-standard modules ({module}) through utils is deprecated.", stacklevel=2)
 		return getattr(module, x)
