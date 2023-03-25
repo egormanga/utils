@@ -776,14 +776,14 @@ def cast(*types): return lambda x: (t(i) if (not isinstance(i, t)) else i for t,
 
 @suppress_tb
 def cast_call(f, *args, **kwargs):
-	f.__annotations__ = get_annotations(f)
+	(f.__func__ if (isinstance(f, method)) else f).__annotations__ = get_annotations(f)
 	fsig = inspect.signature(f)
 	try:
 		args = [(v.annotation)(args[ii]) if (v.annotation is not inspect._empty and not isinstance(args[ii], v.annotation)) else args[ii] for ii, (k, v) in enumerate(fsig.parameters.items()) if ii < len(args)]
 		kwargs = {k: (fsig.parameters[k].annotation)(v) if (k in fsig.parameters and fsig.parameters[k].annotation is not inspect._empty and not isinstance(v, fsig.parameters[k].annotation)) else v for k, v in kwargs.items()}
 	except Exception as ex: raise CastError() from ex
 	r = f(*args, **kwargs)
-	return (fsig.return_annotation)(r) if (fsig.return_annotation is not inspect._empty) else r
+	return ((fsig.return_annotation)(r) if (fsig.return_annotation is not inspect._empty) else r)
 class CastError(TypeError): pass
 
 @funcdecorator
@@ -2145,7 +2145,7 @@ def each(*x): pass
 def apmain(f):
 	def decorated(*, nolog=None):
 		if (nolog is None): nolog = not any(_logged_start)
-		if (hasattr(f, '_argdefs')):
+		if (hasattr(f, '_argdefs')): # TODO: move out of `decorated()`?
 			while (f._argdefs):
 				args, kwargs = f._argdefs.popleft()
 				argparser.add_argument(*args, **kwargs)
