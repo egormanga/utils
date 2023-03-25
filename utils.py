@@ -673,7 +673,7 @@ class dispatch:
 
 		if (isinstance(t, typing.TypeVar)):
 			if (not isinstance(o, typing_inspect.get_constraints(t))): return False
-		elif (isinstance(t, (types.UnionType, typing._UnionGenericAlias))): # TODO FIXME: typing_inspect.is_optional_type()?
+		elif (hasattr(types, 'UnionType') and isinstance(t, (types.UnionType, typing._UnionGenericAlias))): # TODO FIXME: typing_inspect.is_optional_type()?
 			if (not any(cls.__typecheck(o, i) for i in typing.get_args(t))): return False
 			else: return True
 		elif (typing_inspect.is_literal_type(t)): # TODO FIXME: broaden the case
@@ -2048,7 +2048,7 @@ class SlotsInitMeta(SlotsOnlyMeta):
 			for k, v in allannotations(cls).items():
 				try: a = kwargs.pop(k)
 				except KeyError:
-					if (typing_inspect.is_optional_type(v) or isinstance(v, types.UnionType) and NoneType in typing.get_args(v)): a = (typing.get_origin(v := typing.get_args(v)[-1]) or v)()
+					if (typing_inspect.is_optional_type(v) or (hasattr(types, 'UnionType') and isinstance(v, types.UnionType) and NoneType in typing.get_args(v))): a = (typing.get_origin(v := typing.get_args(v)[-1]) or v)()
 					else: raise TypeError(f"{try_repr(self)} missing a required keyword-only argument: {k}")
 				else:
 					if (isinstance(v, type) and not dispatch._dispatch__typecheck(a, v)): raise TypeError(f"{try_repr(a)} is not of type {try_repr(v)}")
