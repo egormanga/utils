@@ -2155,6 +2155,9 @@ def apmain(f):
 		return f(cargs)
 	return decorated
 
+@dispatch
+def apcmd(f: callable): return apcmd()(f)
+@dispatch
 def apcmd(*args, **kwargs):
 	@funcdecorator(suppresstb=False)
 	def decorator(f):
