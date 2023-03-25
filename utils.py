@@ -300,11 +300,11 @@ class Slist(S_type, list): # TODO: fix everywhere: type(x) == y --> isinstance(x
 	def rindex(self, x, start=0): # TODO end
 		return len(self)-self[:(start or None) and start-1:-1].index(x)-1
 
-	def group(self, n): # TODO FIXME: (*(...),) -> tuple() everywhere
-		return Slist((*(j for j in i if (j is not None)),) for i in itertools.zip_longest(*[iter(self)]*n))
+	def group(self, n):
+		return Slist(tuple(j for j in i if j is not None) for i in itertools.zip_longest(*(iter(self),)*n))
 
 	def flatten(self):
-		return Slist(j for i in self if i for j in (i if (i and isiterable(i) and not isinstance(i, str)) else (i,)))
+		return Slist(j for i in self if i for j in (i if (isiterablenostr(i)) else (i,)))
 
 	def strip(self, s=None):
 		l = self.copy()
@@ -427,8 +427,8 @@ class Sstr(S_type, str):
 
 	def cyclefit(self, l, n, *, sep=' '*8, start_delay=0, **kwargs):
 		if (len(self) <= l): return self
-		n = max(0, (n % (len(self)+len(sep)+start_delay))-start_delay)
-		return Sstr((self+sep)[n:]+self[:n]).fit(l)
+		n = max(0, (n % (len(self) + len(sep) + start_delay)) - start_delay)
+		return Sstr((self + sep)[n:] + self[:n]).fit(l)
 
 	def join(self, l, *, first='', last=None):
 		l = tuple(map(str, l))
@@ -597,7 +597,7 @@ class dispatch:
 		self.__call__ = method(function(code_with(self.___call__.__code__, name=f"<overload handler of '{self.__qualname__}'>"), self.___call__.__globals__), self)
 
 		if (getattr(f, '__signature__', None) is ...): del f.__signature__ # TODO FIXME ???
-		f.__annotations__ = inspect.get_annotations(f, eval_str=True)
+		f.__annotations__ = _inspect_get_annotations(f, eval_str=True)
 		fsig = inspect.signature(f)
 		params_annotation = tuple(map(self.__Param.from_inspect_parameter, fsig.parameters.values()))
 
@@ -639,7 +639,7 @@ class dispatch:
 		args = list(args)
 
 		for (params, retval), func in self.__overloaded_functions[self.__origmodule__, self.__qualname__].items():
-			func.__annotations__ = inspect.get_annotations(func, eval_str=True)
+			func.__annotations__ = _inspect_get_annotations(func, eval_str=True)
 			fsig = inspect.signature(func)
 
 			try: bound = fsig.bind(*args, **kwargs)
@@ -742,6 +742,19 @@ def format_inspect_annotation(annotation):
 	if (isinstance(annotation, tuple)): return ', '.join(map(format_inspect_annotation, annotation)).join('()')
 	return inspect.formatannotation(annotation)
 
+def _inspect_get_annotations(x, *, globals=None, locals=None, eval_str=False):
+	try: get_annotations = inspect.get_annotations
+	except AttributeError: pass
+	else: return get_annotations(x, globals=globals, locals=locals, eval_str=eval_str)
+
+	try: res = x.__annotations__.copy()
+	except AttributeError: return {}
+	if (eval_str):
+		for k, v in res.items():
+			try: res[k] = eval(v, globals, locals)
+			except Exception: pass
+	return res
+
 @dispatch
 def get_annotations(classdict: lambda x: isinstance(x, dict) and x.get('__module__') in sys.modules, *, eval_str=True, globals=None, locals=None): return get_annotations(classdict.get('__annotations__', {}), eval_str=eval_str, globals=globals if (globals is not None or not eval_str) else getattr(sys.modules.get(classdict['__module__']), '__dict__', None), locals=locals if (locals is not None or not eval_str) else classdict)
 @dispatch
@@ -749,13 +762,13 @@ def get_annotations(annotations: dict, *, eval_str=False, globals=None, locals=N
 @dispatch
 def get_annotations(x: lambda x: hasattr(x, '__wrapped__'), **kwargs): return get_annotations(x.__wrapped__, **kwargs)
 @dispatch
-def get_annotations(cls: type, *, eval_str=True, globals=None, locals=None): return get_annotations(inspect.get_annotations(cls), eval_str=eval_str, globals=globals if (globals is not None or not eval_str) else getattr(sys.modules.get(cls.__module__, {}), '__dict__', None), locals=locals if (locals is not None or not eval_str) else dict(vars(cls)))
+def get_annotations(cls: type, *, eval_str=True, globals=None, locals=None): return get_annotations(_inspect_get_annotations(cls), eval_str=eval_str, globals=globals if (globals is not None or not eval_str) else getattr(sys.modules.get(cls.__module__, {}), '__dict__', None), locals=locals if (locals is not None or not eval_str) else dict(vars(cls)))
 @dispatch
-def get_annotations(m: module, *, eval_str=True, globals=None, locals=None): return get_annotations(inspect.get_annotations(m), eval_str=eval_str, globals=globals if (globals is not None or not eval_str) else getattr(f, '__dict__', None), locals=locals)
+def get_annotations(m: module, *, eval_str=True, globals=None, locals=None): return get_annotations(_inspect_get_annotations(m), eval_str=eval_str, globals=globals if (globals is not None or not eval_str) else getattr(f, '__dict__', None), locals=locals)
 @dispatch
 def get_annotations(p: (functools.partial, functools.cached_property), **kwargs): return get_annotations(p.func, **kwargs)
 @dispatch
-def get_annotations(f: callable, *, eval_str=True, globals=None, locals=None): return get_annotations(inspect.get_annotations(f), eval_str=eval_str, globals=globals if (globals is not None or not eval_str) else getattr(f, '__globals__', None), locals=locals)
+def get_annotations(f: callable, *, eval_str=True, globals=None, locals=None): return get_annotations(_inspect_get_annotations(f), eval_str=eval_str, globals=globals if (globals is not None or not eval_str) else getattr(f, '__globals__', None), locals=locals)
 @dispatch
 def get_annotations(p: property, **kwargs): return get_annotations(p.fget, **kwargs)
 
@@ -925,7 +938,7 @@ def allslots(obj): return allslots(type(obj))
 def spreadargs(f, okwargs, *args, **akwargs):
 	fsig = inspect.signature(f)
 	kwargs = S(okwargs) & akwargs
-	try: kwnames = (*(i[0] for i in fsig.parameters.items() if (assert_(i[1].kind != inspect.Parameter.VAR_KEYWORD) and i[1].kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY))),)
+	try: kwnames = tuple(i[0] for i in fsig.parameters.items() if (assert_(i[1].kind != inspect.Parameter.VAR_KEYWORD) and i[1].kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)))
 	except AssertionError: kwnames = kwargs.keys()
 	for i in kwnames:
 		try: del okwargs[i]
@@ -964,13 +977,14 @@ logoutput = sys.stderr
 loglock = queue.LifoQueue()
 _logged_start = dict()
 _logged_utils_start = None
-def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False, width=80, unlock=False, flush=True, nolog=False, nofile=False): # TODO: finally rewrite me as class pls
+def log(l=None, *x, sep=' ', end='\n', fileend=None, ll=None, raw=False, tm=None, format=False, width=80, unlock=False, flush=True, nolog=False, nofile=False): # TODO: finally rewrite me as class pls
 	""" Log anything. Print (formatted with datetime) to stderr and logfile (if set). Should be compatible with builtins.print().
 	Parameters:
-		[l]: level, must be >= global loglevel to print to stderr rather than only to logfile (or /dev/null).
+		l?: level, must be >= global loglevel to print to stderr rather than only to logfile (or /dev/null).
 		*x: print-like args, what to log.
 		sep: print-like separator.
 		end: print-like line end.
+		fileend: line end override for logfile.
 		ll: formatted string instead of loglevel for output.
 		raw: if true, do not print datetime/loglevel prefix if set.
 		tm: specify datetime; `time.time()' if not set, nothing if false.
@@ -990,11 +1004,11 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 	x = 'plog():\n'*bool(format and not raw)+sep.join(map((lambda x: pprint.pformat(x, width=width)) if (format) else str, x))
 	clearstr = Sstr(x).noesc()
 	if (tm is None): tm = time.localtime()
-	if (not unlock and not loglock.empty()): loglock.put(((_l, *_x), dict(sep=sep, end=end, raw=raw, tm=tm, nolog=nolog, nofile=nofile))); return clearstr
+	if (not unlock and not loglock.empty()): loglock.put(((_l, *_x), dict(sep=sep, end=end, fileend=fileend, raw=raw, tm=tm, nolog=nolog, nofile=nofile))); return clearstr
 	try: lc = logcolor[l]
 	except (TypeError, IndexError): lc = ''
+	if (fileend is None): fileend = end
 	if (ll is None): ll = f'[\033[1m{lc}LV{l}\033[0;96m]' if (l is not None) else ''
-	logstr = f"\033[K\033[96m{tm if (isinstance(tm, str)) else time.strftime('[%x %X] ', tm) if (tm) else ''}\033[0;96m{ll}\033[0;1m{' '*bool(ll)+x if (x != '') else ''}\033[0m{end}" if (not raw) else str(x)+end
 	if (unlock and not loglock.empty()):
 		ul = list()
 		for i in iter_queue(loglock):
@@ -1002,8 +1016,9 @@ def log(l=None, *x, sep=' ', end='\n', ll=None, raw=False, tm=None, format=False
 			ul.append(i)
 		for i in ul[::-1]:
 			log(*i[0], **i[1])
-	if (logfile and not nofile): print(logstr, end='', file=logfile, flush=flush)
-	if (not nolog and (l or 0) <= loglevel): print(logstr, end='', file=logoutput, flush=True)
+	logstr = (f"\033[K\033[96m{tm if (isinstance(tm, str)) else time.strftime('[%x %X] ', tm) if (tm) else ''}\033[0;96m{ll}\033[0;1m{' '*bool(ll)+x if (x != '') else ''}\033[0m" if (not raw) else str(x))
+	if (logfile and not nofile): print(logstr, end=fileend, file=logfile, flush=flush)
+	if (not nolog and (l or 0) <= loglevel): print(logstr, end=end, file=logoutput, flush=True)
 	return clearstr
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
 def _dlog(*args, prefix='', **kwargs): parseargs(kwargs, ll=f"\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m{prefix}", tm=''); return log(*args, **kwargs)
@@ -1182,7 +1197,7 @@ class DB:
 				except KeyError:
 					if (not nolog): log(1, f"Not in DB: {field}")
 					if (field not in globals):
-						try: globals[field] = default if (default is not self._empty) else annotation()
+						try: globals[field] = (default if (default is not self._empty) else annotation())
 						except TypeError: pass
 				else: globals[field] = value
 
@@ -1444,7 +1459,7 @@ class TaskTree(NodesTree):
 		__slots__ = ('title', 'state', 'subtasks', 'printed')
 
 		def __init__(self, title, subtasks=None):
-			self.title, self.subtasks = str(title), subtasks if (subtasks is not None) else []
+			self.title, self.subtasks = str(title), (subtasks if (subtasks is not None) else [])
 			self.state = None
 
 	def __init__(self, x, **kwargs):
