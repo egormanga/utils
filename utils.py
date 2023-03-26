@@ -419,6 +419,9 @@ class Sstr(S_type, str):
 	def __or__(self, x):
 		return self if (self.strip()) else x
 
+	def group(self, n, sep=' '):
+		return S(sep).join(str().join(j for j in i if j is not None) for i in itertools.zip_longest(*(iter(self),)*n))
+
 	def fit(self, l, *, end='…', bytes=False):
 		enc = self.encode()
 		end_enc = end.encode()
