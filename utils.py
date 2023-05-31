@@ -170,7 +170,9 @@ def export(x):
 		except AttributeError: name = x.__class__.__name__
 	all.append(name.rpartition('.')[-1])
 	return x
-def suppress_tb(f): f.__code__ = code_with(f.__code__, name=f.__qualname__, firstlineno=0, **{'linetable' if (sys.version_info >= (3, 10)) else 'lnotab': b''}); return f
+def suppress_tb(f):
+	f.__code__ = code_with(f.__code__, name=f.__qualname__, firstlineno=0, **{'linetable' if (sys.version_info >= (3, 10)) else 'lnotab': (b'\xff'*(len(f.__code__.co_linetable)//8+1) if (sys.version_info >= (3, 11)) else b'')})
+	return f
 
 def terminal_link(link, text=None): return f"\033]8;;{Sstr(link).noesc().fit(1634, bytes=True)}\033\\{text if (text is not None) else link}\033]8;;\033\\"
 
@@ -1172,9 +1174,9 @@ class DB:
 			self.serializer = serializer
 
 	def register(self, *fields):
-		with self.lock:
-			globals = inspect.stack()[1].frame.f_globals
+		globals = inspect.stack()[1].frame.f_globals
 
+		with self.lock:
 			for field in fields:
 				self.fields[field] = (globals, globals.get('__annotations__', {}).get(field, self._empty), globals.get(field, self._empty))
 
@@ -1206,7 +1208,7 @@ class DB:
 
 		return db
 
-	def save(self, db={}, backup=None, nolog=None):
+	def save(self, db=None, backup=None, nolog=None):
 		with self.lock:
 			nolog = (self.nolog if (nolog is None) else nolog)
 			backup = (self.backup if (backup is None) else backup)
@@ -1220,7 +1222,13 @@ class DB:
 				try: shutil.copyfile(self.file.name, f"backup/{self.file.name if (hasattr(self.file, 'name')) else ''}_{int(time.time())}.db")
 				except OSError: pass
 
-			try: self.serializer.dump(db or {field: globals[0][field] if (isinstance(globals, tuple)) else globals[field] for field, globals in self.fields.items() if not isinstance(globals, tuple) and field in globals or isinstance(globals, tuple) and field in globals[0] and globals[2] is not None and globals[0][field] != globals[2]}, self.file)
+			try:
+				if (db is None): db = {field: globals[0][field] if (isinstance(globals, tuple)) else globals[field]
+				                       for field, globals in self.fields.items()
+				                       if (not isinstance(globals, tuple) and field in globals)
+				                          or (isinstance(globals, tuple) and field in globals[0]
+				                              and globals[2] is not None and globals[0][field] != globals[2])}
+				self.serializer.dump(db, self.file)
 			except Exception as ex:
 				if (not nolog): logex(ex)
 			else:
@@ -2405,6 +2413,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 		name = code.co_name
 		src = srcs[code.co_filename]
 		lines = set()
+		codepos = first(itertools.islice(code.co_positions(), frame.f_lasti//2, None), default=None)
 
 		if (src and lineno > 0):
 			loff = float('inf')
@@ -2430,15 +2439,15 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 			#for i in range(*sorted((frame.f_lineno-1, lineno))):
 			#	lines.add((i+1, src[i]))
 
-		res.append((file, name, lineno, sorted(lines), frame))
+		res.append((file, name, lineno, sorted(lines), frame, codepos))
 
 	if (res):
 		print("\033[0;91mTraceback\033[0m \033[2m(most recent call last)\033[0m:", file=_file)
-		maxlnowidth = max((max(len(str(ln)) for ln, line, hline in lines) for file, name, lineno, lines, frame in res if lines), default=0)
+		maxlnowidth = max((max(len(str(ln)) for ln, line, hline in lines) for file, name, lineno, lines, frame, codepos in res if lines), default=0)
 
 	last = lines = lastlines = None
 	repeated = int()
-	for file, name, lineno, lines, frame in res:
+	for file, name, lineno, lines, frame, codepos in res:
 		if (os.path.commonpath((os.path.abspath(file), os.getcwd())) != '/'): file = os.path.relpath(file)
 
 		if ((file, lineno) != last):
@@ -2464,6 +2473,10 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 					print(end=f"\033[{hc}m", file=_file)
 					hline = hline.replace(r';00m', rf";00;{hc}m") # TODO FIXME \033
 				print(hline.rstrip().expandtabs(4), end='\033[0m\n', file=_file) #'\033[0m'+ # XXX?
+				if (codepos is not None and codepos[0] == ln):
+					nt, sl = S(line).lstripcount('\t')
+					if (codepos[3] < len(sl)): print(' '*(8+maxlnowidth+3), ' '*(4*nt), ' '*(codepos[2] - nt - 1), *(('\033[2;95m', '╰', '\033[22m', '╌'*(codepos[3] - codepos[2]), '\033[2m', '╯') if (codepos[3] - codepos[2] > 1+2) else ' \033[2;95m^\033[0m'), sep='', end='\033[0m\n', file=_file)
+
 		else:
 			#if (lines == lastlines): repeated += 1 # TODO FIXME XXX: scope
 			if (lines != lastlines or repeated <= 1):
