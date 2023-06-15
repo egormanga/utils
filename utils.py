@@ -144,7 +144,8 @@ def isiterable(x): return isinstance(x, typing.Iterable)
 def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
 def isnumber(x): return isinstance(x, numbers.Number)
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args); return kwargs
-def hex(x, l=2): return '0x%%0%dX' % l % x
+def hex(x, l=2): logexception(DeprecationWarning(" *** hex() → hexf() *** ")); return builtins.hex(x)
+def hexf(x, l=2): return (f'0x%0{l}X' % x)
 def md5(x, n=1): x = x if (isinstance(x, bytes)) else str(x).encode(); return hashlib.md5(md5(x, n-1).encode() if (n > 1) else x).hexdigest()
 def b64(x): return base64.b64encode(x if (isinstance(x, bytes)) else str(x).encode()).decode()
 def ub64(x): return base64.b64decode(x).decode()
@@ -2413,7 +2414,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 		name = code.co_name
 		src = srcs[code.co_filename]
 		lines = set()
-		codepos = first(itertools.islice(code.co_positions(), frame.f_lasti//2, None), default=None)
+		codepos = (first(itertools.islice(code.co_positions(), frame.f_lasti//2, None), default=None) if (sys.version_info >= (3, 11)) else None)
 
 		if (src and lineno > 0):
 			loff = float('inf')
