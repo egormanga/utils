@@ -1026,9 +1026,9 @@ def log(l=None, *x, sep=' ', end='\n', fileend=None, ll=None, raw=False, tm=None
 		except (TypeError, IndexError): lc = ''
 		if (isinstance(tm, int)): tm = time.gmtime(tm)
 		if (isinstance(tm, time.struct_time)): tm = time.strftime('[%x %X]', tm)
+		elif (isinstance(tm, datetime.datetime)): tm = tm.strftime('[%x %X]')
 		elif (isinstance(tm, datetime.date)): tm = tm.strftime('[%x]')
 		elif (isinstance(tm, datetime.time)): tm = tm.strftime('[%X]')
-		elif (isinstance(tm, datetime.datetime)): tm = tm.strftime('[%x %X]')
 		if (tm): tm = f"{fc}{tm}\033[0m"
 		if (ll is None): ll = (f"{fc}[\033[1m{lc}LV{l}{fc.replace('[', '[0;')}]\033[0m" if (l is not None) else '')
 		logstr = f"\033[K{tm}{' '*bool(tm)}{ll}{' '*bool(ll)}\033[1m{x}\033[0m"
