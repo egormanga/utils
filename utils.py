@@ -587,7 +587,7 @@ class dispatch:
 
 		@property
 		def required(self):
-			return (self.default is self._empty)
+			return (self.default is inspect._empty)
 
 		@classmethod
 		def from_inspect_parameter(cls, param):
@@ -856,11 +856,13 @@ class cachedfunction:
 	def __call__(self, *args, **kwargs):
 		if (self._obj is not None): args = (self._obj, *args)
 		k = tohashable((args, kwargs))
-		if (k not in self._cached):
+		try: return self._cached[k]
+		except KeyError:
 			r = self.__wrapped__(*args, **kwargs)
-			if (not isinstance(r, self._noncached)): self._cached[k] = r
+			if (not isinstance(r, self._noncached)):
+				self._cached[k] = r
+				return r
 			else: return r.value
-		return self._cached[k]
 
 	def nocache(self, *args, **kwargs):
 		if (self._obj is not None): args = (self._obj, *args)
@@ -2337,7 +2339,7 @@ class listmap:
 			yield (k, self[k])
 
 class indexset:
-	class _empty: pass
+	class _empty: __slots__ = ()
 
 	def __init__(self, list_=None):
 		self._list = list_ or []
