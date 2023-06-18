@@ -1,0 +1,32 @@
+#!/bin/bash
+
+terminal_link() {
+	link="$1"; shift
+	[[ "$1" ]] && { text="$1"; shift; } || text="${link}"
+	printf '\e]8;;%s\e\\%s\e]8;;\e\\' "${link}" "${text}"
+}
+
+cd .. &&
+trap 'echo -e "\e[?1049l"' EXIT
+for ver in '3.11' '3.10' '3.9'; do
+	if ( which python"${ver}" &> /dev/null ); then
+		echo -ne "\e[1mTesting on \e[96m$(python"${ver}" --version)\e[0m \e[3m($(which python"${ver}"))...\e[0m "
+		echo -ne '\e[?1049h\e[H'
+
+		echo
+		echo -e "\t\e[1;95m>>>\e[0m \e[1mTesting on \e[96m$(python"${ver}" --version)\e[0m \e[1;95m<<<\e[0m"
+		echo
+
+		python"${ver}" -m utils.tests; ec=$?
+
+		echo -ne '\e[?1049l'
+		if (( "$ec" )); then
+			echo -e "\e[1;91mFAIL\e[0m (run \e[96m\`$(terminal_link "python${ver} -m utils.tests")\`\e[39m to replicate)"
+			exit $ec
+		else
+			echo -e "\e[1;92mOK\e[0m"
+		fi
+	else
+		echo -e "\e[2mSkipping \e[96mPython ${ver}\e[39m as not installed.\e[0m"
+	fi
+done
