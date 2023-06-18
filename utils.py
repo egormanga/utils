@@ -1080,16 +1080,15 @@ def unlocklog(): logdumb(unlock=True)
 def logflush(): logdumb(flush=True)
 def setutilsnologimport(): log._logged_utils_start = True
 
-_exc_handlers = set()
-def register_exc_handler(f): _exc_handlers.add(f)
 _logged_exceptions = set()
 @dispatch
-def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=False, _dlog=False, _caught=True, **kwargs):
+def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=False, nohandlers=False, _dlog=False, _caught=True, **kwargs):
 	""" Log an exception.
 	Parameters:
 		ex: exception to log.
 		extra: additional info to log.
-		nolog: do not call exc_handlers and do not write to stderr.
+		nolog: do not write to stderr.
+		nohandlers: do not call exc_handlers.
 	"""
 	ex = unraise(ex)
 	if (isinstance(ex, NonLoggingException)): return
@@ -1097,10 +1096,12 @@ def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=Fal
 		if (repr(ex) in _logged_exceptions): return
 		_logged_exceptions.add(repr(ex))
 	e = (dlog if (_dlog) else log)(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+ex.__class__.__qualname__+(' on line '+' -> '.join(terminal_link(f'file://{socket.gethostname()}'+os.path.realpath(i[0].f_code.co_filename) if (os.path.exists(i[0].f_code.co_filename)) else i[0].f_code.co_filename, i[1]) for i in traceback.walk_tb(ex.__traceback__) if i[1])).rstrip(' on line')+'\033[0m'+(': '+str(ex))*bool(str(ex))+('\033[0;2m; ('+str(extra)+')\033[0m' if (extra is not None) else ''), raw=raw, nolog=nolog, **kwargs)
-	if (nolog): return
-	for i in _exc_handlers:
-		try: i(e, ex)
-		except Exception: pass
+	if (not nohandlers):
+		for i in log._exc_handlers:
+			try: i(e, ex)
+			except Exception: pass
+log._exc_handlers = set()
+def register_exc_handler(f): log._exc_handlers.add(f)
 def logexception(*args, **kwargs): return exception(*args, **kwargs, _caught=False)
 def dlogexception(*args, **kwargs): return logexception(*args, **kwargs, _dlog=True)
 
