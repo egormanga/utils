@@ -1022,12 +1022,11 @@ def log(l=None, *x, sep=' ', end='\n', fileend=None, ll=None, raw=False, tm=None
 		fc = '\033[96m'
 		try: lc = logcolor[l]
 		except (TypeError, IndexError): lc = ''
-		match type(tm):
-			case builtins.int: tm = time.strftime('[%x %X]', time.gmtime(tm))
-			case time.struct_time: tm = time.strftime('[%x %X]', tm)
-			case datetime.datetime: tm = tm.strftime('[%x %X]')
-			case datetime.date: tm = tm.strftime('[%x]')
-			case datetime.time: tm = tm.strftime('[%X]')
+		if (isinstance(tm, int)): tm = time.gmtime(tm)
+		if (isinstance(tm, time.struct_time)): tm = time.strftime('[%x %X]', tm)
+		elif (isinstance(tm, datetime.date)): tm = tm.strftime('[%x]')
+		elif (isinstance(tm, datetime.time)): tm = tm.strftime('[%X]')
+		elif (isinstance(tm, datetime.datetime)): tm = tm.strftime('[%x %X]')
 		if (tm): tm = f"{fc}{tm}\033[0m"
 		if (ll is None): ll = (f"{fc}[\033[1m{lc}LV{l}{fc.replace('[', '[0;')}]\033[0m" if (l is not None) else '')
 		logstr = f"\033[K{tm}{' '*bool(tm)}{ll}{' '*bool(ll)}\033[1m{x}\033[0m"
