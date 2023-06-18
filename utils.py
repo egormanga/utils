@@ -1089,14 +1089,14 @@ def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=Fal
 	Parameters:
 		ex: exception to log.
 		extra: additional info to log.
-		nolog: no not call exc_handlers.
+		nolog: do not call exc_handlers and do not write to stderr.
 	"""
 	ex = unraise(ex)
 	if (isinstance(ex, NonLoggingException)): return
 	if (once):
 		if (repr(ex) in _logged_exceptions): return
 		_logged_exceptions.add(repr(ex))
-	e = (dlog if (_dlog) else log)(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+ex.__class__.__qualname__+(' on line '+' -> '.join(terminal_link(f'file://{socket.gethostname()}'+os.path.realpath(i[0].f_code.co_filename) if (os.path.exists(i[0].f_code.co_filename)) else i[0].f_code.co_filename, i[1]) for i in traceback.walk_tb(ex.__traceback__) if i[1])).rstrip(' on line')+'\033[0m'+(': '+str(ex))*bool(str(ex))+('\033[0;2m; ('+str(extra)+')\033[0m' if (extra is not None) else ''), raw=raw, **kwargs)
+	e = (dlog if (_dlog) else log)(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+ex.__class__.__qualname__+(' on line '+' -> '.join(terminal_link(f'file://{socket.gethostname()}'+os.path.realpath(i[0].f_code.co_filename) if (os.path.exists(i[0].f_code.co_filename)) else i[0].f_code.co_filename, i[1]) for i in traceback.walk_tb(ex.__traceback__) if i[1])).rstrip(' on line')+'\033[0m'+(': '+str(ex))*bool(str(ex))+('\033[0;2m; ('+str(extra)+')\033[0m' if (extra is not None) else ''), raw=raw, nolog=nolog, **kwargs)
 	if (nolog): return
 	for i in _exc_handlers:
 		try: i(e, ex)
