@@ -122,7 +122,7 @@ argparser.add_argument('-v', action='count', help=argparse.SUPPRESS)
 argparser.add_argument('-q', action='count', help=argparse.SUPPRESS)
 cargs = argparser.parse_known_args()[0]
 argparser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
-loglevel = (cargs.v or 0)-(cargs.q or 0)
+loglevel = ((cargs.v or 0) - (cargs.q or 0))
 
 # TODO: types.*
 dict_keys, dict_values, dict_items = type({}.keys()), type({}.values()), type({}.items())
@@ -980,20 +980,17 @@ logcolor = ('\033[94m', '\033[92m', '\033[93m', '\033[91m', '\033[95m')
 noesc = re.compile(r'\033 (?: \] \w* ; \w* ; [^\033]* (?: \033\\ | \x07) | \[? [0-?]* [ -/]* [@-~]?)', re.X)
 logfile = None
 logoutput = sys.stderr
-loglock = queue.LifoQueue()
-_logged_start = dict()
-_logged_utils_start = None
 def log(l=None, *x, sep=' ', end='\n', fileend=None, ll=None, raw=False, tm=None, format=False, width=80, unlock=False, flush=True, nolog=False, nofile=False): # TODO: finally rewrite me as class pls
-	""" Log anything. Print (formatted with datetime) to stderr and logfile (if set). Should be compatible with builtins.print().
+	""" Log anything. Print (formatted with datetime) to stderr and logfile (if set). Should be compatible with `builtins.print()'.
 	Parameters:
-		l?: level, must be >= global loglevel to print to stderr rather than only to logfile (or /dev/null).
+		l?: level, must be >= global loglevel to print to stderr rather than only to logfile (or `/dev/null').
 		*x: print-like args, what to log.
 		sep: print-like separator.
 		end: print-like line end.
 		fileend: line end override for logfile.
 		ll: formatted string instead of loglevel for output.
 		raw: if true, do not print datetime/loglevel prefix if set.
-		tm: specify datetime; `time.time()' if not set, nothing if false.
+		tm: specify datetime; current time if not set, nothing if false.
 		format: if true, apply `pprint.pformat()' to args.
 		width: specify output line width for wrapping; autodetect from stderr if not specified.
 		unlock: if true, release all previously holded («locked») log messages.
@@ -1001,31 +998,57 @@ def log(l=None, *x, sep=' ', end='\n', fileend=None, ll=None, raw=False, tm=None
 		nolog: if true, force suppress printing to stderr.
 		nofile: if true, force suppress printing to logfile.
 	"""
-	global loglock, _logged_utils_start
-	if (isinstance(_logged_utils_start, tuple)): _logged_utils_start, _logstateargs = True, _logged_utils_start; logstart('Utils'); logstate(*_logstateargs)
-	_l, _x = l, x#map(copy.copy, (l, x))
+
+	if (isinstance(log._logged_utils_start, tuple)):
+		log._logged_utils_start, _logstateargs = True, log._logged_utils_start
+		logstart('Utils')
+		logstate(*_logstateargs)
+
+	_l, _x = l, x
 	if (l is None): l = ''
 	if (type(l) is not int): l, x = None, (l, *x)
 	if (x == ()): l, x = 0, (l,)
-	x = 'plog():\n'*bool(format and not raw)+sep.join(map((lambda x: pprint.pformat(x, width=width)) if (format) else str, x))
+
+	x = (('plog():\n'*bool(format and not raw)) + sep.join(map(((lambda x: pprint.pformat(x, width=width)) if (format) else str), x)))
 	clearstr = Sstr(x).noesc()
-	if (tm is None): tm = time.localtime()
-	if (not unlock and not loglock.empty()): loglock.put(((_l, *_x), dict(sep=sep, end=end, fileend=fileend, raw=raw, tm=tm, nolog=nolog, nofile=nofile))); return clearstr
-	try: lc = logcolor[l]
-	except (TypeError, IndexError): lc = ''
-	if (fileend is None): fileend = end
-	if (ll is None): ll = f'[\033[1m{lc}LV{l}\033[0;96m]' if (l is not None) else ''
-	if (unlock and not loglock.empty()):
+
+	if (tm is None): tm = datetime.datetime.now().astimezone()
+
+	if (not unlock and not log._loglock.empty()):
+		log._loglock.put((copy.deepcopy((_l, *_x)), dict(sep=sep, end=end, fileend=fileend, raw=raw, tm=tm, nolog=nolog, nofile=nofile)))
+		return clearstr
+
+	if (not raw):
+		fc = '\033[96m'
+		try: lc = logcolor[l]
+		except (TypeError, IndexError): lc = ''
+		match type(tm):
+			case builtins.int: tm = time.strftime('[%x %X]', time.gmtime(tm))
+			case time.struct_time: tm = time.strftime('[%x %X]', tm)
+			case datetime.datetime: tm = tm.strftime('[%x %X]')
+			case datetime.date: tm = tm.strftime('[%x]')
+			case datetime.time: tm = tm.strftime('[%X]')
+		if (tm): tm = f"{fc}{tm}\033[0m"
+		if (ll is None): ll = (f"{fc}[\033[1m{lc}LV{l}{fc.replace('[', '[0;')}]\033[0m" if (l is not None) else '')
+		logstr = f"\033[K{tm}{' '*bool(tm)}{ll}{' '*bool(ll)}\033[1m{x}\033[0m"
+	else: logstr = str(x)
+
+	if (unlock and not log._loglock.empty()):
 		ul = list()
-		for i in iter_queue(loglock):
+		for i in iter_queue(log._loglock):
 			if (i is None): break
 			ul.append(i)
 		for i in ul[::-1]:
 			log(*i[0], **i[1])
-	logstr = (f"\033[K\033[96m{tm if (isinstance(tm, str)) else time.strftime('[%x %X] ', tm) if (tm) else ''}\033[0;96m{ll}\033[0;1m{' '*bool(ll)+x if (x != '') else ''}\033[0m" if (not raw) else str(x))
+
+	if (fileend is None): fileend = end
 	if (logfile and not nofile): print(logstr, end=fileend, file=logfile, flush=flush)
 	if (not nolog and (l or 0) <= loglevel): print(logstr, end=end, file=logoutput, flush=True)
+
 	return clearstr
+log._loglock = queue.LifoQueue()
+log._logged_start = dict()
+log._logged_utils_start = None
 def plog(*args, **kwargs): parseargs(kwargs, format=True); return log(*args, **kwargs)
 def _dlog(*args, prefix='', **kwargs): parseargs(kwargs, ll=f"\033[95m[\033[1mDEBUG\033[0;95m]\033[0;96m{prefix}", tm=''); return log(*args, **kwargs)
 def dlog(*args, **kwargs): return _dlog(*map(str, args), **kwargs)
@@ -1034,16 +1057,14 @@ def rlog(*args, **kwargs): parseargs(kwargs, raw=True); return log(*args, **kwar
 def logdumb(**kwargs): return log(raw=True, end='', **kwargs)
 def logstart(x):
 	""" from utils[.nolog] import *; logstart(name) """
-	global _logged_start, _logged_utils_start
-	if (_logged_utils_start is None): _logged_utils_start = False; return
+	if (log._logged_utils_start is None): log._logged_utils_start = False; return
 	#if ((name := inspect.stack()[1].frame.f_globals.get('__name__')) is not None):
-	if (_logged_start.get(x) is True): return
-	_logged_start[x] = True
+	if (log._logged_start.get(x) is True): return
+	log._logged_start[x] = True
 	log(x+'\033[0m...', end=' ') #, nolog=(x == 'Utils'))
 	locklog()
 def logstate(state, x=''):
-	global _logged_utils_start
-	if (_logged_utils_start is False): _logged_utils_start = (state, x); return
+	if (log._logged_utils_start is False): log._logged_utils_start = (state, x); return
 	log(state+(': '+str(x))*bool(str(x))+'\033[0m', raw=True, unlock=True)
 def logstarted(x=''): """ if (__name__ == '__main__'): logstart(); main() """; logstate('\033[94mstarted', x)
 def logimported(x=''): """ if (__name__ != '__main__'): logimported() """; logstate('\033[96mimported', x)
@@ -1053,10 +1074,10 @@ def logwarn(x=''): logstate('\033[93mwarning', x)
 def setlogoutput(f): global logoutput; logoutput = f
 def setlogfile(f): global logfile; logfile = open(f, 'a') if (isinstance(f, str)) else f
 def setloglevel(l): global loglevel; loglevel = l
-def locklog(): loglock.put(None)
+def locklog(): log._loglock.put(None)
 def unlocklog(): logdumb(unlock=True)
 def logflush(): logdumb(flush=True)
-def setutilsnologimport(): global _logged_utils_start; _logged_utils_start = True
+def setutilsnologimport(): log._logged_utils_start = True
 
 _exc_handlers = set()
 def register_exc_handler(f): _exc_handlers.add(f)
@@ -1082,14 +1103,26 @@ def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=Fal
 def logexception(*args, **kwargs): return exception(*args, **kwargs, _caught=False)
 def dlogexception(*args, **kwargs): return logexception(*args, **kwargs, _dlog=True)
 
+def dcall(f): logexception(DeprecationWarning(" *** dcall() → tracecall() *** ")); return tracecall(f)
+
 @funcdecorator
-def dcall(f):
+def tracecall(f):
 	def decorated(*args, **kwargs):
 		fcall = f"{f.__name__}({', '.join((*map(repr, args), *(f'{k}={repr(v)}' for k, v in kwargs.items())))})"
 		dlog(f"→ {fcall}", end='\n\n')
 		try: r = f(*args, **kwargs)
 		except Exception as ex: dlogexception(ex, prefix=f"\033[39m × {fcall}\n", end='\n\n'); raise
 		else: dlog(f"← {fcall} -> {repr(r)}", end='\n\n'); return r
+	return decorated
+
+@funcdecorator
+def atracecall(f):
+	async def decorated(*args, **kwargs):
+		fcall = f"{f.__name__}({', '.join((*map(repr, args), *(f'{k}={repr(v)}' for k, v in kwargs.items())))})"
+		dlog(f"→ await {fcall}", end='\n\n')
+		try: r = await f(*args, **kwargs)
+		except Exception as ex: dlogexception(ex, prefix=f"\033[39m × {fcall}\n", end='\n\n'); raise
+		else: dlog(f"← await {fcall} -> {repr(r)}", end='\n\n'); return r
 	return decorated
 
 def raise_(ex): raise ex
@@ -2156,7 +2189,7 @@ def each(*x): pass
 @funcdecorator
 def apmain(f):
 	def decorated(*, nolog=None):
-		if (nolog is None): nolog = not any(_logged_start)
+		if (nolog is None): nolog = not any(log._logged_start)
 		if (hasattr(f, '_argdefs')): # TODO: move out of `decorated()`?
 			while (f._argdefs):
 				args, kwargs = f._argdefs.popleft()
@@ -2638,10 +2671,9 @@ class TEST(BaseException): pass
 class NonLoggingException(Exception): pass
 
 def exit(c=None, code=None, raw=False, nolog=None):
-	global _logged_start
-	if (nolog is None): nolog = not any(_logged_start)
+	if (nolog is None): nolog = not any(log._logged_start)
 		#name = inspect.stack()[1].frame.f_globals.get('__name__')
-		#nolog = not (name is not None and _logged_start.get(name))
+		#nolog = not (name is not None and log._logged_start.get(name))
 	if (not nolog and sys.stderr.isatty()): print('\r\033[K', file=sys.stderr, flush=True)
 	unlocklog()
 	db.save(nolog=True)
