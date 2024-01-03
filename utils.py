@@ -144,7 +144,6 @@ def isiterable(x): return isinstance(x, typing.Iterable)
 def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
 def isnumber(x): return isinstance(x, numbers.Number)
 def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args); return kwargs
-def hex(x, l=2): logexception(DeprecationWarning(" *** hex() → hexf() *** ")); return builtins.hex(x)
 def hexf(x, l=2): return (f'0x%0{l}X' % x)
 def md5(x, n=1): x = x if (isinstance(x, bytes)) else str(x).encode(); return hashlib.md5(md5(x, n-1).encode() if (n > 1) else x).hexdigest()
 def b64(x): return base64.b64encode(x if (isinstance(x, bytes)) else str(x).encode()).decode()
@@ -425,10 +424,12 @@ class Sstr(S_type, str):
 	def group(self, n, sep=' '):
 		return S(sep).join(str().join(j for j in i if j is not None) for i in itertools.zip_longest(*(iter(self),)*n))
 
-	def fit(self, l, *, end='…', bytes=False):
-		enc = self.encode()
-		end_enc = end.encode()
-		if (bytes): return Sstr(self if (len(enc) <= l) else enc[:l-len(end_enc)].decode(errors='ignore')+end if (l >= len(end_enc)) else '')
+	def fit(self, l, *, end='…', noesc=True, bytes=False):
+		if (noesc): self = self.noesc()
+		if (bytes):
+			enc = self.encode()
+			end_enc = end.encode()
+			return Sstr(self if (len(enc) <= l) else enc[:l-len(end_enc)].decode(errors='ignore')+end if (l >= len(end_enc)) else '')
 		else: return Sstr(self if (len(self) <= l) else self[:l-len(end)]+end if (l >= len(end)) else '')
 
 	def cyclefit(self, l, n, *, sep=' '*8, start_delay=0, **kwargs):
@@ -889,24 +890,24 @@ def lrucachedfunction(maxsize=None, typed=True):
 	return decorator
 def lrucachedclass(c): return lrucachedfunction(c)
 
-try: cachedproperty = functools.cached_property # TODO
-except AttributeError:
-	class cachedproperty:
-		class _empty: __slots__ = ()
-		_empty = _empty()
+class Scachedproperty:
+	class _empty: __slots__ = ()
+	_empty = _empty()
 
-		__slots__ = ('__wrapped__',)
+	__slots__ = ('__wrapped__', '_cached')
 
-		def __init__(self, f):
-			self.__wrapped__ = f
-			self._cached = self._empty
+	def __init__(self, f):
+		self.__wrapped__ = f
+		self._cached = self._empty
 
-		def __get__(self, obj, objcls):
-			if (self._cached is self._empty): self._cached = self.__wrapped__(obj)
-			return self._cached
+	def __get__(self, obj, objcls):
+		if (self._cached is self._empty): self._cached = self.__wrapped__(obj)
+		return self._cached
 
-		def clear_cache(self):
-			self._cached.clear()
+	def clear_cache(self):
+		self._cached.clear()
+try: cachedproperty = functools.cached_property
+except AttributeError: cachedproperty = Scachedproperty
 
 @dispatch
 def allsubclasses(cls: type):
@@ -2069,7 +2070,7 @@ class TypeInitMeta(SlotsTypecheckMeta):
 				if (v is ... or isinstance(v, str)): continue
 				if (isinstance(getattr(cls, k, None), (property, functools.cached_property))): continue
 				try: object.__getattribute__(self, k)
-				except AttributeError: object.__setattr__(self, k, (v() if (isinstance(v, (type, function, method))) else v))
+				except AttributeError: object.__setattr__(self, k, (v() if (isinstance(v, (type, function, method, types.GenericAlias))) else v))
 			__init_o__(self, *args, **kwargs)
 
 		cls.__init__ = __init__
@@ -2491,7 +2492,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 
 			filepath = (os.path.dirname(file)+os.path.sep if (os.path.dirname(file)) else '')
 			link = f'file://{socket.gethostname()}'+os.path.realpath(file) if (os.path.exists(file)) else file
-			if (lines or lineno > 0): print('  File '+terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(file)}\033[0m")+f", in \033[93m{name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}", file=_file)
+			if (lines or lineno > 0): print('  File '+terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(file)}\033[0m")+f", in \033[93m{terminal_link(repr(frame.f_globals[name]), name) if (name in frame.f_globals) else name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}", file=_file)
 			else: print('  \033[2mFile '+terminal_link(link, f"\033[36m{filepath}\033[96m{os.path.basename(file)}\033[0;2m")+f", in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[0m", file=_file)
 
 			mlw = int()
@@ -2511,7 +2512,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 				print(hline.rstrip().expandtabs(4), end='\033[0m\n', file=_file) #'\033[0m'+ # XXX?
 				if (codepos is not None and codepos[0] == ln):
 					nt, sl = S(line).lstripcount('\t')
-					if (codepos[3] < len(sl)): print(' '*(8+maxlnowidth+3), ' '*(4*nt), ' '*(codepos[2] - nt - 1), *(('\033[2;95m', '╰', '\033[22m', '╌'*(codepos[3] - codepos[2]), '\033[2m', '╯') if (codepos[3] - codepos[2] > 1+2) else ' \033[2;95m^\033[0m'), sep='', end='\033[0m\n', file=_file)
+					if (codepos[3] < len(sl)): print(' '*(8+maxlnowidth+3 - (codepos[2] <= 1)), ' '*(4*nt), ' '*(codepos[2] - nt - 1), *(('\033[2;95m', '╰', '\033[22m', '╌'*(codepos[3] - codepos[2] + (codepos[2] == 1)), '\033[2m', '╯') if (codepos[3] - codepos[2] > 1+2) else ' \033[2;95m^\033[0m'), sep='', end='\033[0m\n', file=_file)
 
 		else:
 			#if (lines == lastlines): repeated += 1 # TODO FIXME XXX: scope
@@ -2630,7 +2631,7 @@ class grep(Slots):
 
 	@init(sep='\n')
 	def __init__(self, expr, flags=0):
-		self.expr, self.flags = expr, flags
+		self.expr, self.flags = repr(expr), flags
 
 	def __ror__(self, x):
 		for l in Sstr(x).noesc().split(self.sep):
@@ -2695,5 +2696,5 @@ if (__name__ == '__main__'):
 	log('\033[0mWhy\033[0;2m are u trying to run me?! It \033[0;93mtickles\033[0;2m!..\033[0m', raw=True)
 else: logimported()
 
-# by Sdore, 2021-22
+# by Sdore, 2021-24
 #   www.sdore.me
