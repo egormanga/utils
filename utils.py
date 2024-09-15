@@ -2148,7 +2148,7 @@ class SlotsTypecheckMeta(type):
 		                                                                                        and 'return' in get_annotations(v)
 		                                                                                    }).items()
 		                                                 } for c in S((*bases, *(j for i in bases for j in i.mro()))).uniquize()[::-1]), {}).items():
-			if (v is not ... and (a := annotations.get(k)) and a != v and not issubclass(typing.get_origin(a) or a, typing.get_origin(v) or v)):
+			if (v is not ... and (a := annotations.get(k)) and a != v and not (isinstance(ac := (typing.get_origin(a) or a), type) and issubclass(ac, typing.get_origin(v) or v))):
 				raise TypeError(f"Specified slot type annotation (class {name}, '{k}: {format_inspect_annotation(a)}') is not a subclass of its parent's annotation (class {c.__name__}, '{k}: {format_inspect_annotation(v)}')")
 
 		return super().__new__(metacls, name, bases, classdict)
@@ -2169,7 +2169,7 @@ class TypeInitMeta(SlotsTypecheckMeta):
 				if (v is ... or isinstance(v, str)): continue
 				if (isinstance(getattr(cls, k, None), (property, functools.cached_property))): continue
 				try: object.__getattribute__(self, k)
-				except AttributeError: object.__setattr__(self, k, (v() if (isinstance(v, (type, function, method, types.GenericAlias))) else v))
+				except AttributeError: object.__setattr__(self, k, (v() if (isinstance(v, (type, function, method, builtin_function_or_method, types.GenericAlias))) else v))
 			__init_o__(self, *args, **kwargs)
 
 		cls.__init__ = __init__
