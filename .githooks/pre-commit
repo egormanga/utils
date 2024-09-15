@@ -8,7 +8,7 @@ terminal_link() {
 
 cd .. &&
 trap 'echo -e "\e[?1049l"' EXIT
-for ver in '3.11' '3.10' '3.9'; do
+for ver in '3.12' '3.11' '3.10' '3.9'; do
 	if ( which python"${ver}" &> /dev/null ); then
 		echo -ne "\e[1mTesting on \e[96m$(python"${ver}" --version)\e[0m \e[3m($(which python"${ver}"))...\e[0m "
 		echo -ne '\e[?1049h\e[H'

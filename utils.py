@@ -26,7 +26,7 @@ class ModuleProxy(types.ModuleType):
 
 	def __getattribute__(self, x):
 		module = __import__(name := object.__getattribute__(self, '__name__'))
-		try: inspect.stack()[1].frame.f_globals[name] = module
+		try: inspect.stack(0)[1].frame.f_globals[name] = module
 		except (TypeError, IndexError): pass
 		if (module.__name__ not in {*getattr(sys, 'stdlib_module_names', ()), *sys.builtin_module_names} or
 		    any('site-packages' in (getattr(module, i, None) or '') for i in ('__file__', '__path__'))):
@@ -47,6 +47,7 @@ _autoimports = (
 	'copy',
 	'glob',
 	'gzip',
+	'hmac',
 	'html',
 	'http',
 	'json',
@@ -79,6 +80,7 @@ _autoimports = (
 	'secrets',
 	'termios',
 	'zipfile',
+	'calendar',
 	'datetime',
 	'platform',
 	'tempfile',
@@ -92,11 +94,12 @@ _autoimports = (
 	'rlcompleter',
 	'unicodedata',
 	'configparser',
+	'socketserver',
 	'multiprocessing',
 	#'nonexistenttest'
 )
 
-_globals_ = frozenset(sum((tuple(i.frame.f_globals) for i in inspect.stack()[1:]), start=()))
+_globals_ = frozenset(sum((tuple(i.frame.f_globals) for i in inspect.stack(0)[1:]), start=()))
 #print(_globals_)
 for i in _autoimports:
 	if (i in _globals_): continue
@@ -132,6 +135,8 @@ builtin_function_or_method = types.BuiltinFunctionType
 method = types.MethodType
 method_descriptor = types.MethodDescriptorType
 generator = types.GeneratorType
+coroutine = types.CoroutineType
+async_generator = types.AsyncGeneratorType
 CodeType = types.CodeType
 TracebackType = types.TracebackType
 NoneType = type(None)
@@ -143,8 +148,9 @@ tab = TAB = '\t'
 def isiterable(x): return isinstance(x, typing.Iterable)
 def isiterablenostr(x): return isiterable(x) and not isinstance(x, str)
 def isnumber(x): return isinstance(x, numbers.Number)
-def parseargs(kwargs, **args): args.update(kwargs); kwargs.update(args); return kwargs
-def hexf(x, l=2): return (f'0x%0{l}X' % x)
+def parseargs(kwargs, **args): args |= kwargs; kwargs |= args; return kwargs
+def setdefault(d: dict, **kwargs) -> dict: r = d | kwargs; r |= d; return r
+def hexf(x, l=2): return (f"0x%0{l}X" % x)
 def md5(x, n=1): x = x if (isinstance(x, bytes)) else str(x).encode(); return hashlib.md5(md5(x, n-1).encode() if (n > 1) else x).hexdigest()
 def b64(x): return base64.b64encode(x if (isinstance(x, bytes)) else str(x).encode()).decode()
 def ub64(x): return base64.b64decode(x).decode()
@@ -161,7 +167,7 @@ def safeexec():
 		return exec(sys.stdin.readline())
 	finally: print(end='\033[0m', file=sys.stderr, flush=True)
 def export(x):
-	globals = inspect.stack()[1].frame.f_globals
+	globals = inspect.stack(0)[1].frame.f_globals
 	all = globals.setdefault('__all__', [])
 	if (not isinstance(all, list)): all = globals['__all__'] = list(all)
 	try: name = x.__qualname__
@@ -171,21 +177,24 @@ def export(x):
 	all.append(name.rpartition('.')[-1])
 	return x
 def suppress_tb(f):
-	f.__code__ = code_with(f.__code__, name=f.__qualname__, firstlineno=0, **{'linetable' if (sys.version_info >= (3, 10)) else 'lnotab': (b'\xff'*(len(f.__code__.co_linetable)//8+1) if (sys.version_info >= (3, 11)) else b'')})
+	f.__code__ = code_with(f.__code__, name=f.__qualname__, firstlineno=0, **{'linetable' if (sys.version_info >= (3, 10)) else 'lnotab': (b'\xff'*(len(f.__code__.co_code)//2+1) if (sys.version_info >= (3, 11)) else b'')})
 	return f
+
+def code_with(code, **kwargs):
+	if (sys.version_info >= (3, 8)): return code.replace(**{'co_'*(not k.startswith('co_'))+k: v for k, v in kwargs.items()})
+	return CodeType(*(kwargs.get(i, kwargs.get('co_'+i, getattr(code, 'co_'+i))) for i in ('argcount', 'kwonlyargcount', 'nlocals', 'stacksize', 'flags', 'code', 'consts', 'names', 'varnames', 'filename', 'name', 'firstlineno', 'lnotab', 'freevars', 'cellvars')))
+# TODO: func_with()
 
 def terminal_link(link, text=None): return f"\033]8;;{Sstr(link).noesc().fit(1634, bytes=True)}\033\\{text if (text is not None) else link}\033]8;;\033\\"
 
 import pygments.lexers, pygments.formatters
 def highlight(s: str, *, lexer=pygments.lexers.PythonLexer(), formatter=pygments.formatters.TerminalFormatter(bg='dark')): return pygments.highlight(s, lexer, formatter)
 
-def S(x=None, *, ni_ok=False):
+def S(*x, ni_ok=False):
 	""" Convert `x' to an instance of corresponding S-type. """
-	ex = None
-	try: return Stuple(x) if (isinstance(x, generator)) else eval('S'+type(x).__name__)(x) if (not isinstance(x, S_type)) else x
-	except NameError: ex = True
-	if (ni_ok): return x
-	if (ex): raise NotImplementedError("S%s" % type(x).__name__)
+
+	r = tuple(i if (isinstance(i, S_type)) else Stuple(i) if (isinstance(i, generator)) else globals().get('S'+i.__class__.__name__, lambda i: raise_(NotImplementedError('S'+i.__class__.__name__)) if (not ni_ok) else i)(i) for i in x)
+	return (first(r) if (len(r) == 1) else r)
 
 class S_type: pass
 
@@ -209,6 +218,7 @@ class Sdict(S_type, collections.defaultdict):
 		else: return
 		raise AttributeError(x)
 
+	@suppress_tb
 	def __missing__(self, k):
 		if (self.default_factory is None): raise KeyError(k)
 		try: r = self.default_factory()
@@ -522,11 +532,6 @@ def Sbool(x=bool(), *args, **kwargs): # No way to derive a class from bool
 	x = S(x)
 	return x.bool(*args, **kwargs) if (hasattr(x, 'bool')) else bool(x)
 
-def code_with(code, **kwargs):
-	if (sys.version_info >= (3, 8)): return code.replace(**{'co_'*(not k.startswith('co_'))+k: v for k, v in kwargs.items()})
-	return CodeType(*(kwargs.get(i, kwargs.get('co_'+i, getattr(code, 'co_'+i))) for i in ('argcount', 'kwonlyargcount', 'nlocals', 'stacksize', 'flags', 'code', 'consts', 'names', 'varnames', 'filename', 'name', 'firstlineno', 'lnotab', 'freevars', 'cellvars')))
-# TODO: func_with()
-
 def funcdecorator(df=None, /, *, signature=None, suppresstb=True): # TODO: __dict__?
 	if (df is None): return lambda df: funcdecorator(df, signature=signature, suppresstb=suppresstb)
 
@@ -611,8 +616,13 @@ class dispatch:
 		self.__overloaded_functions[self.__origmodule__, self.__qualname__][params_annotation, fsig.return_annotation] = f
 		self.__overloaded_functions_docstrings[self.__origmodule__, self.__qualname__][fsig] = f.__doc__
 
+		wf = f
+		while (True):
+			try: wf = wf.__wrapped__
+			except AttributeError: break
+
 		f.__origname__, f.__name__ = f.__name__, f"Overloaded {f.__name__}"
-		f.__code__ = code_with(f.__code__, name=f"<overloaded '{f.__qualname__}' for {f.__origname__}{format_inspect_signature(fsig)}>")
+		wf.__code__ = code_with(wf.__code__, name=f"<overloaded '{f.__qualname__}' for {f.__origname__}{format_inspect_signature(fsig)}>")
 
 		#print(f"\n\033[1;92m{self.__qualname__}()\033[0;1m:\033[0m")
 		#for params, retval in self.__overloaded_functions[self.__origmodule__, self.__qualname__]:
@@ -626,50 +636,56 @@ class dispatch:
 
 	@suppress_tb
 	def ___call__(self, *args, **kwargs):
-		f, params, retval = self.__dispatch(*args, **kwargs)
+		args, kwargs, f, params, retval = self.__dispatch(*args, **kwargs)
 
 		r = f(*args, **kwargs)
 
 		if (retval is not inspect._empty):
-			if (not self.__typecheck(r, retval)): raise DispatchError(f"Return value of type {type(r)} doesn't match the return annotation of the corresponding '{self.__qualname__}' signature:\n  {self.__origname__}{_format_inspect_signature({i.name: i for i in params}, retval)}\n(called as: '{self.__origname__}({', '.join((*(S(try_repr(i)).fit(32) for i in args), *(S(f'{k}={try_repr(v)}').fit(32) for k, v in kwargs.items())))})')")
+			if (not self.__typecheck(r, retval)): raise DispatchError(f"Return value of type {type(r)} doesn't match the return annotation of the corresponding '{self.__qualname__}' signature:\n  {self.__origname__}{_format_inspect_signature({i.name: i for i in params}, retval)}\n[called as: {self.__origname__}({', '.join((*(S(try_repr(i)).fit(32) for i in args), *(S(f'{k}={try_repr(v)}').fit(32) for k, v in kwargs.items())))})]")
 
 		return r
 
 	def __get__(self, obj, objcls):
-		return method(self, obj) if (obj is not None) else self
+		return (method(self, obj) if (obj is not None) else self)
 
 	def __getitem__(self, *t):
 		return self.__overloaded_functions[self.__origmodule__, self.__qualname__][t]
 
 	@suppress_tb
 	def __dispatch(self, *args, **kwargs):
-		args = list(args)
-
 		for (params, retval), func in self.__overloaded_functions[self.__origmodule__, self.__qualname__].items():
 			func.__annotations__ = _inspect_get_annotations(func, eval_str=True)
 			fsig = inspect.signature(func)
 
-			try: bound = fsig.bind(*args, **kwargs)
-			except TypeError: continue
+			for args_ in (args, args[1:]) if (isinstance(func, staticmethod)) else (args,):
+				try: bound = fsig.bind(*args_, **kwargs)
+				except TypeError: continue
 
-			pars = {i.name: i for i in params}
+				pars = {i.name: i for i in params}
 
-			ok = bool()
-			for k, v in bound.arguments.items():
-				try: p = pars[k]
-				except KeyError: break
-				if (not self.__typecheck(v, p.type)): break
-			else: ok = True
-			if (not ok): continue
+				ok = bool()
+				for k, v in bound.arguments.items():
+					try: p = pars[k]
+					except KeyError: break
 
-			bound.apply_defaults()
+					if (p.kind is inspect.Parameter.VAR_KEYWORD):
+						if (not all(self.__typecheck(i, p.type) for i in v.values())): break
+					elif (p.kind is inspect.Parameter.VAR_POSITIONAL):
+						if (not all(self.__typecheck(i, p.type) for i in v)): break
+					else:
+						if (not self.__typecheck(v, p.type)): break
+				else: ok = True
+				if (not ok): continue
 
-			return (func, params, retval)
+				bound.apply_defaults()
+
+				return (args_, kwargs, func, params, retval)
 
 		try: return (self.__overloaded_functions[self.__origmodule__, self.__qualname__][(), inspect._empty], (), inspect._empty)
 		except KeyError: pass
 
-		raise DispatchError(f"Parameters {S(', ').join((*(format_inspect_annotation(type(i)) for i in args), *(f'{k}: {format_inspect_annotation(type(v))}' for k, v in kwargs.items()))).join('()')} don't match any of '{self.__qualname__}' signatures:\n{'  • '+f'{ENDL}  • '.join(self.format_signatures(sep=ENDL).split(ENDL))}\n(called as: '{self.__origname__}({', '.join((*(S(try_repr(i)).fit(32) for i in args), *(S(f'{k}={try_repr(v)}').fit(32) for k, v in kwargs.items())))})')")
+		sigs = self.format_signatures(sep='\n').split('\n')
+		raise DispatchError(f"Parameters {S(', ').join((*(format_inspect_annotation(type(i)) for i in args), *(f'{k}: {format_inspect_annotation(type(v))}' for k, v in kwargs.items()))).join('()')} don't match {'any of' if (len(sigs) > 1) else 'the'} '{self.__qualname__}' signature{'s'*(len(sigs) > 1)}:\n{'  • '+f'{NL}  • '.join(sigs) if (len(sigs) > 1) else f'    {only(sigs)}'}\n[called as: {self.__origname__}({', '.join((*(S(try_repr(i)).fit(32) for i in args), *(S(f'{k}={try_repr(v)}').fit(32) for k, v in kwargs.items())))})]")
 
 	@classmethod
 	def __typecheck(cls, o, t):
@@ -854,12 +870,16 @@ class cachedfunction:
 		self._obj = obj
 		return self
 
+	@suppress_tb
 	def __call__(self, *args, **kwargs):
 		if (self._obj is not None): args = (self._obj, *args)
 		k = tohashable((args, kwargs))
 		try: return self._cached[k]
 		except KeyError:
-			r = self.__wrapped__(*args, **kwargs)
+			try: r = self.__wrapped__(*args, **kwargs)
+			except Exception as ex:
+				ex.__context__ = None
+				raise
 			if (not isinstance(r, self._noncached)):
 				self._cached[k] = r
 				return r
@@ -876,7 +896,12 @@ class cachedfunction:
 
 	def clear_cache(self):
 		self._cached.clear()
-class cachedclass(cachedfunction): pass
+class cachedclass(cachedfunction):
+	def __subclasscheck__(self, subcls):
+		return issubclass(subcls, self.__wrapped__)
+
+	def __instancecheck__(self, obj):
+		return isinstance(obj, self.__wrapped__)
 
 @dispatch
 def lrucachedfunction(f: callable): return lrucachedfunction()(f)
@@ -890,7 +915,7 @@ def lrucachedfunction(maxsize=None, typed=True):
 	return decorator
 def lrucachedclass(c): return lrucachedfunction(c)
 
-class Scachedproperty:
+class cachedclassproperty:
 	class _empty: __slots__ = ()
 	_empty = _empty()
 
@@ -907,12 +932,13 @@ class Scachedproperty:
 	def clear_cache(self):
 		self._cached.clear()
 try: cachedproperty = functools.cached_property
-except AttributeError: cachedproperty = Scachedproperty
+except AttributeError: cachedproperty = cachedclassproperty # TODO FIXME!
+Scachedproperty = cachedclassproperty # TODO FIXME!
 
 @dispatch
 def allsubclasses(cls: type):
 	""" Get all subclasses of class `cls' and its subclasses and so on recursively. """
-	return cls.__subclasses__()+[j for i in cls.__subclasses__() for j in allsubclasses(i)]
+	return (cls.__subclasses__() + [j for i in cls.__subclasses__() for j in allsubclasses(i)])
 @dispatch
 def allsubclasses(obj): return allsubclasses(type(obj))
 
@@ -1012,7 +1038,7 @@ def log(l=None, *x, sep=' ', end='\n', fileend=None, ll=None, raw=False, tm=None
 	if (type(l) is not int): l, x = None, (l, *x)
 	if (x == ()): l, x = 0, (l,)
 
-	x = (('plog():\n'*bool(format and not raw)) + sep.join(map(((lambda x: pprint.pformat(x, width=width)) if (format) else str), x)))
+	x = (('plog():\n'*bool(format and not raw)) + sep.join(map(((lambda x: pprint.pformat(x, width=width, sort_dicts=False)) if (format) else str), x)))
 	clearstr = Sstr(x).noesc()
 
 	if (tm is None): tm = datetime.datetime.now().astimezone()
@@ -1060,7 +1086,7 @@ def logdumb(**kwargs): return log(raw=True, end='', **kwargs)
 def logstart(x):
 	""" from utils[.nolog] import *; logstart(name) """
 	if (log._logged_utils_start is None): log._logged_utils_start = False; return
-	#if ((name := inspect.stack()[1].frame.f_globals.get('__name__')) is not None):
+	#if ((name := inspect.stack(0)[1].frame.f_globals.get('__name__')) is not None):
 	if (log._logged_start.get(x) is True): return
 	log._logged_start[x] = True
 	log(x+'\033[0m...', end=' ') #, nolog=(x == 'Utils'))
@@ -1083,7 +1109,7 @@ def setutilsnologimport(): log._logged_utils_start = True
 
 _logged_exceptions = set()
 @dispatch
-def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=False, nohandlers=False, _dlog=False, _caught=True, **kwargs):
+def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=False, nohandlers=False, _dlog=False, _caught=False, **kwargs):
 	""" Log an exception.
 	Parameters:
 		ex: exception to log.
@@ -1096,14 +1122,14 @@ def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=Fal
 	if (once):
 		if (repr(ex) in _logged_exceptions): return
 		_logged_exceptions.add(repr(ex))
-	e = (dlog if (_dlog) else log)(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+ex.__class__.__qualname__+(' on line '+' -> '.join(terminal_link(f'file://{socket.gethostname()}'+os.path.realpath(i[0].f_code.co_filename) if (os.path.exists(i[0].f_code.co_filename)) else i[0].f_code.co_filename, i[1]) for i in traceback.walk_tb(ex.__traceback__) if i[1])).rstrip(' on line')+'\033[0m'+(': '+str(ex))*bool(str(ex))+('\033[0;2m; ('+str(extra)+')\033[0m' if (extra is not None) else ''), raw=raw, nolog=nolog, **kwargs)
+	e = (dlog if (_dlog) else log)(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+ex.__class__.__qualname__+(' on line '+' -> '.join(terminal_link((f"file://{socket.gethostname()}" + os.path.realpath(i[0].f_code.co_filename)) if (os.path.exists(i[0].f_code.co_filename)) else i[0].f_code.co_filename, i[1]) for i in traceback.walk_tb(ex.__traceback__) if i[1])).removesuffix(' on line')+'\033[0m'+(': '+str(ex))*bool(str(ex))+('\033[0;2m; ('+str(extra)+')\033[0m' if (extra is not None) else ''), raw=raw, nolog=nolog, **kwargs)
 	if (not nohandlers):
 		for i in log._exc_handlers:
 			try: i(e, ex)
 			except Exception: pass
 log._exc_handlers = set()
 def register_exc_handler(f): log._exc_handlers.add(f)
-def logexception(*args, **kwargs): return exception(*args, **kwargs, _caught=False)
+def logexception(*args, **kwargs): return exception(*args, **kwargs, _caught=True)
 def dlogexception(*args, **kwargs): return logexception(*args, **kwargs, _dlog=True)
 
 def dcall(f): logexception(DeprecationWarning(" *** dcall() → tracecall() *** ")); return tracecall(f)
@@ -1128,6 +1154,7 @@ def atracecall(f):
 		else: dlog(f"← await {fcall} -> {repr(r)}", end='\n\n'); return r
 	return decorated
 
+@suppress_tb
 def raise_(ex): raise ex
 
 @dispatch
@@ -1211,7 +1238,7 @@ class DB:
 			self.serializer = serializer
 
 	def register(self, *fields):
-		globals = inspect.stack()[1].frame.f_globals
+		globals = inspect.stack(0)[1].frame.f_globals
 
 		with self.lock:
 			for field in fields:
@@ -1222,13 +1249,13 @@ class DB:
 			nolog = (self.nolog if (nolog is None) else nolog)
 
 			if (not self.file): return
-			if (not nolog): logstart('Loading database')
+			if (not nolog): logstart("Loading database")
 
 			db = dict()
 
 			try: db = self.serializer.load(self.file)
 			except EOFError:
-				if (not nolog): logwarn('database is empty')
+				if (not nolog): logwarn("database is empty")
 			else:
 				if (not nolog): logok()
 
@@ -1251,7 +1278,7 @@ class DB:
 			backup = (self.backup if (backup is None) else backup)
 
 			if (not self.file): return
-			if (not nolog): logstart('Saving database')
+			if (not nolog): logstart("Saving database")
 
 			if (backup):
 				try: os.mkdir('backup')
@@ -1299,10 +1326,17 @@ class Progress:
 		if (add_speed_eta is None): add_speed_eta = self.add_speed_eta
 		if (self.started is None or not cv): add_speed_eta = False
 
-		l = self.l(add_base) if (self._pool is None) else max(i.l(add_base) for i in self._pool.p)
-		fstr = self.prefix+('%s/%s (%d%%%s) ' if (not self.fixed) else f"%{l}s/%-{l}s (%-3d%%%s) ")
-		r = fstr % (*((cv, self.mv) if (not add_base) else (self.format_base(i, base=add_base) for i in (cv, self.mv))), (cv*100//self.mv if (self.mv) else 0), ', '+self.format_speed_eta(cv, self.mv, (time.time() - self.started), fixed=self.fixed, add_base=add_base) if (add_speed_eta) else '')
-		return (r + self.format_bar(cv, self.mv, width-len(r), chars=self.chars, border=self.border, fill=self.fill))
+		l = (self.l(add_base) if (self._pool is None) else max(i.l(add_base) for i in self._pool.p))
+
+		fstr = (self.prefix + ('%s/%s (%d%%%s) ' if (not self.fixed) else f"%{l}s/%-{l}s (%-3d%%%s) "))
+		r = (fstr % (*((cv, self.mv) if (not add_base) else ((self.format_base(i, base=add_base)) for i in (cv, self.mv))), (cv*100//self.mv if (self.mv) else 0), ', '+self.format_speed_eta(cv, self.mv, (time.time() - self.started), fixed=self.fixed, add_base=add_base) if (add_speed_eta) else ''))
+
+		w = len(r)
+		if (self._pool is not None):
+			if (w > self._pool.mw): self._pool.mw = w
+			else: w = self._pool.mw
+
+		return (r.rjust(w) + self.format_bar(cv, self.mv, (width - w), chars=self.chars, border=self.border, fill=self.fill))
 
 	@staticmethod
 	def format_bar(cv, mv, width, *, chars=' ▏▎▍▌▋▊▉█', border='│', fill=' '):
@@ -1310,15 +1344,15 @@ class Progress:
 		if (not isiterablenostr(border)): border = (border, border)
 		d = 100/(width-2)
 		fp, pp = (divmod(cv*100/d, mv) if (mv) else (0, 0))
-		pb = chars[-1]*int(fp) + (chars[int(pp*len(chars)//mv)]*(cv != mv) if (mv) else '')
+		pb = (chars[-1]*int(fp) + (chars[int(pp*len(chars)//mv)]*(cv != mv) if (mv) else ''))
 		return f"{border[0]}{pb.ljust(width-2, fill)}{border[1]}"
 
 	@classmethod
 	def format_speed_eta(cls, cv, mv, elapsed, *, fixed=False, add_base=None):
 		speed = cv/elapsed
-		eta = math.ceil(mv/speed)-elapsed if (speed) else 0
-		if (fixed): return (first(f"%2d{'dhms'[ii]}" % i for ii, i in enumerate((eta//60//60//24, eta//60//60%24, eta//60%60, eta%60)) if i) if (eta > 0) else ' ? ')+' ETA'
-		eta = ' '.join(f"{int(i)}{'dhms'[ii]}" for ii, i in enumerate((eta//60//60//24, eta//60//60%24, eta//60%60, eta%60)) if i) if (eta > 0) else '?'
+		eta = (math.ceil(mv/speed)-elapsed if (speed) else 0)
+		if (fixed): return ((first(f"%2d{'dhms'[ii]}" % i for ii, i in enumerate((eta//60//60//24, eta//60//60%24, eta//60%60, eta%60)) if i) if (eta > 0) else ' ? ') + ' ETA')
+		eta = (' '.join(f"{int(i)}{'dhms'[ii]}" for ii, i in enumerate((eta//60//60//24, eta//60//60%24, eta//60%60, eta%60)) if i) if (eta > 0) else '?')
 		speed_u = 0
 		for i in (60, 60, 24):
 			if (speed < 1): speed *= i; speed_u += 1
@@ -1334,17 +1368,22 @@ class Progress:
 
 		if (base is True): base = (1000, ' KMB')
 		step, names = base
+
 		l = len(names)
 		if (_calc_len): sl, nl = len(S(step))-1, max(map(len, names))
+
 		try: return first((f"{{: {sl+nl}}}".format(v) if (_calc_len) else str(v))+(b if (b != ' ') else '') for b, v in ((i, cv//(step**(l-ii))) for ii, i in enumerate(reversed(names), 1)) if v) # TODO: fractions; negative
 		except StopIteration: return '0'
 
 	def print(self, cv, *, out=sys.stderr, width=None, flush=True):
 		if (width is None and out is sys.stderr):
-			try: width = os.get_terminal_size(sys.stderr.fileno())[0]
+			try: width = os.get_terminal_size(out.fileno())[0]
 			except OSError: pass
+
 		if (width is None): return
+
 		print('\033[K' + self.format(cv, width=width), end='\r', file=out, flush=flush)
+
 		self.printed = (out is sys.stderr)
 
 	def l(self, add_base):
@@ -1361,7 +1400,9 @@ class ProgressPool:
 	@dispatch
 	def __init__(self, n: int = 0, **kwargs):
 		#self.__init__(*(Progress(-1, **kwargs, _pool=self) for _ in range(n)), **kwargs)
-		self.p, self.kwargs = [Progress(-1, **parseargs(kwargs, fixed=True), _pool=self) for _ in range(n)], kwargs
+		self.kwargs = kwargs
+		self.p = [Progress(-1, **parseargs(kwargs, fixed=True), _pool=self) for _ in range(n)]
+		self.mw = int()
 		self.ranges = list()
 		self.printed = bool()
 
@@ -1380,21 +1421,28 @@ class ProgressPool:
 			if (ii): print(file=sys.stderr, flush=True)
 			p.print(cv, width=width)
 		if (ii): print(end=f"\033[{ii}A", file=sys.stderr, flush=True)
+
 		self.printed = True
 
 	def range(self, start, stop=None, step=1, **kwargs):
 		if (stop is None): start, stop = 0, start
+
 		n = len(self.ranges)
 		self.ranges.append(int())
-		if (n == len(self.p)): self.p.append(Progress(stop-start, **parseargs(kwargs, **self.kwargs), _pool=self))
-		else: self.p[n].mv = stop-start
+
+		cv = (stop - start)
+		if (n == len(self.p)): self.p.append(Progress(cv, **parseargs(kwargs, **self.kwargs), _pool=self))
+		else: self.p[n].mv = cv
+
 		for i in range(start, stop, step):
-			self.ranges[n] = i-start
+			self.ranges[n] = (i - start)
 			if (n == len(self.p)-1): self.print(*self.ranges)
 			yield i
+
 		self.ranges[n] = stop
 		self.print(*self.ranges)
 		self.ranges.pop()
+
 		self.p.pop()
 
 	@dispatch
@@ -1437,13 +1485,17 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 		if (stop is None): start, stop = 0, start
 		n = self.ranges
 		self.ranges += 1
+
+		cv = (stop - start)
 		if (n == len(self.p)):
-			self.p.append(Progress(stop-start, **parseargs(kwargs, **self.kwargs), _pool=self))
+			self.p.append(Progress(cv, **parseargs(kwargs, **self.kwargs), _pool=self))
 			self.cvs.append(int())
-		else: self.p[n].mv = stop-start
+		else: self.p[n].mv = cv
+
 		for i in range(start, stop, step):
 			self.cvs[n] = i-start
 			yield i
+
 		self.ranges -= 1
 		self.p.pop()
 
@@ -1455,20 +1507,22 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 def progrange(start, stop=None, step=1, **kwargs):
 	parseargs(kwargs, fixed=True)
 	if (stop is None): start, stop = 0, start
-	with Progress(stop-start, **kwargs) as p:
+
+	cv = (stop - start)
+	with Progress(cv, **kwargs) as p:
 		for i in range(start, stop, step):
-			p.print(i-start)
+			p.print(i - start)
 			yield i
 		p.print(stop)
 
 @dispatch
 def progiter(iterator: typing.Iterator, l: int): # TODO: why yield?
-	yield from (next(iterator) for _ in progrange(l))
+	return (next(iterator) for _ in progrange(l))
 
 @dispatch
 def progiter(iterable: typing.Iterable):
 	l = tuple(iterable)
-	yield from (l[i] for i in progrange(len(l)))
+	return (i for _, i in zip(progrange(len(l)), l))
 
 def testprogress(n=1000, sleep=0.002, **kwargs):
 	parseargs(kwargs, fixed=True)
@@ -1608,27 +1662,29 @@ def first(l, default=_raise):
 	except StopIteration:
 		if (default is _raise): raise
 		return default
+@suppress_tb
 def last(l):
 	l = iter(l)
 	r = next(l)
 	while (True):
 		try: r = next(l)
 		except StopIteration: return r
+@suppress_tb
 def only(l):
-	i = iter(l)
-	try: return next(i)
+	l = iter(l)
+	try: return next(l)
 	finally:
-		try: next(i)
+		try: next(l)
 		except StopIteration: pass
 		else: raise StopIteration("Only a single value expected")
 
-def pm(x): return 1 if (x) else -1
+def pm(x): return (+1 if (x) else -1)
 def constrain(x, lb, ub): return min(ub, max(lb, x))
 def prod(x, initial=1): return functools.reduce(operator.mul, x, initial)
 def average(x, default=None): return sum(x)/len(x) if (x) else default if (default is not None) else raise_(ValueError("average() arg is an empty sequence"))
 
-global_lambdas = list() # dunno why
-def global_lambda(l): global_lambdas.append(l); return global_lambdas[-1]
+global_lambdas = list() # TODO: WeakSet
+def global_lambda(l): global_lambdas.append(l); return l
 
 @dispatch
 @suppress_tb
@@ -1637,17 +1693,46 @@ def singleton(C: type): C.__new__ = cachedfunction(C.__new__); return C()
 @suppress_tb
 def singleton(*args, **kwargs): return lambda C: C(*args, **kwargs)
 
+class SingletonMeta(type):
+	_ready = bool()
+
+	@cachedfunction
+	@suppress_tb
+	def __new__(metacls, name, bases, classdict):
+		r = super().__new__(metacls, name, bases, classdict)
+		if (metacls._ready): return r()
+		metacls._ready = True
+		return r
+class Singleton(metaclass=SingletonMeta):
+	def __repr__(self):
+		return f"<Singleton '{self.__class__.__qualname__}'>"
+
 @singleton
 class clear:
 	""" Clear the terminal. """
 
 	def __call__(self):
-		print(end='\033c', flush=True)
+		print(end='\033c', file=sys.stderr, flush=True)
 
 	def __repr__(self):
 		if (not __repl__ and sys.exc_info()[0] is None): return super().__repr__()
 		self()
 		return ''
+
+@singleton
+class termsize:
+	def __str__(self):
+		return f"{self.width}×{self.height}"
+
+	@property
+	def columns(self):
+		return os.get_terminal_size().columns
+	width = columns
+
+	@property
+	def lines(self):
+		return os.get_terminal_size().lines
+	height = lines
 
 class lc:
 	__slots__ = ('category', 'lc', 'pl')
@@ -1682,8 +1767,7 @@ class ll:
 	def __exit__(self, type, value, tb):
 		setloglevel(self.pl)
 
-@singleton
-class timecounter:
+class timecounter(Singleton):
 	def __init__(self):
 		self.started = None
 		self.ended = None
@@ -1714,6 +1798,15 @@ class classonlymethod:
 	def __get__(self, obj, cls=None):
 		if (obj is not None): raise AttributeError(f"'{cls.__name__}.{self.__wrapped__.__name__}()' is a class-only method.")
 		return functools.partial(self.__wrapped__, cls)
+
+class instancemethod:
+	__slots__ = ('__wrapped__',)
+
+	def __init__(self, f):
+		self.__wrapped__ = f
+
+	def __get__(self, obj, cls):
+		return functools.partial(self.__wrapped__, (obj or cls))
 
 class classproperty:
 	__slots__ = ('__wrapped__',)
@@ -1822,6 +1915,12 @@ class staticitemget:
 
 	def keys(self):
 		return self._fkeys(self)
+class staticitemgetclass(staticitemget):
+	def __subclasscheck__(self, subcls):
+		return issubclass(subcls, self.__wrapped__)
+
+	def __instancecheck__(self, obj):
+		return isinstance(obj, self.__wrapped__)
 
 class staticattrget:
 	__slots__ = ('__wrapped__',)
@@ -1997,7 +2096,7 @@ class Builder:
 		self.calls = collections.deque(((None, args, kwargs),))
 
 	def __repr__(self):
-		return f"<{self.__class__.__name__} of {repr(self.cls).strip('<>')}>"
+		return f"<{self.__class__.__name__} of {repr(self.cls).removeprefix('<').removesuffix('>')}>"
 
 	def __getattr__(self, x):
 		return lambda *args, **kwargs: self.calls.append((x, args, kwargs)) and None or self
@@ -2183,9 +2282,6 @@ class noopcm:
 	def __exit__(*_):
 		pass
 
-@cachedfunction
-def getsubparser(ap, *args, **kwargs): return ap.add_subparsers(*args, **kwargs)
-
 @staticitemget
 def each(*x): pass
 
@@ -2210,13 +2306,15 @@ def apcmd(*args, **kwargs):
 	@funcdecorator(suppresstb=False)
 	def decorator(f):
 		nonlocal args, kwargs
-		subparser = getsubparser(argparser, *args, **kwargs).add_parser(f.__name__.rstrip('_'), help=f.__doc__)
+		subparser = _getsubparser(*args, **kwargs).add_parser(f.__name__.removesuffix('_'), help=f.__doc__)
 		if (hasattr(f, '_argdefs')):
 			for args, kwargs in f._argdefs:
 				subparser.add_argument(*args, **kwargs)
 		subparser.set_defaults(func=f)
 		return f
 	return decorator
+@cachedfunction
+def _getsubparser(*args, **kwargs): return argparser.add_subparsers(*args, **kwargs)
 
 def aparg(*args, **kwargs):
 	@funcdecorator(suppresstb=False)
@@ -2233,14 +2331,14 @@ def asyncrun(f):
 		return asyncio.run(f(*args, **kwargs))
 	return decorated
 
-class VarInt:
+class VarInt(Singleton):
 	@staticmethod
 	def read(s):
 		r = int()
 		i = int()
 		while (True):
 			b = s.read(1)[0]
-			r |= (b & 0x7f) << (7*i)
+			r |= ((b & 0x7f) << (7*i))
 			if (not b & 0x80): break
 			i += 1
 		if (r & 1): r = -r
@@ -2267,7 +2365,7 @@ class hashabledict(dict):
 	pop = \
 	popitem = \
 	setdefault = \
-	update = classmethod(lambda cls, *args, **kwargs: raise_(TypeError(f"'{cls.__name__}' object is not modifiable")))
+	update = classmethod(suppress_tb(lambda cls, *args, **kwargs: raise_(TypeError(f"'{cls.__name__}' object is not modifiable"))))
 
 	def __hash__(self):
 		return hash(tuple(self.items()))
@@ -2421,8 +2519,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 	else:
 		if (exc is None): exc, exctype = exctype, type(exctype)
 		if (tb is None): tb = exc.__traceback__
-	if (file is not None): _file = file
-	else: _file = sys.stderr
+	if (file is None): file = sys.stderr
 	_linesep = linesep
 
 	srcs = Sdict(linecache.getlines)
@@ -2438,21 +2535,21 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 				else: return
 			else: return
 
-	if (exc.__context__ is not None and not exc.__suppress_context__):
-		Sexcepthook(exc.__context__, file=_file, linesep=_linesep)
-		print(" \033[0;1m> During handling of the above exception, another exception occurred:\033[0m\n", file=_file)
+	if (exc is not None and exc.__context__ is not None and not exc.__suppress_context__):
+		Sexcepthook(exc.__context__, file=file, linesep=_linesep)
+		print(" \033[0;1m> During handling of the above exception, another exception occurred:\033[0m\n", file=file)
 
 	for frame, lineno in traceback.walk_tb(tb):
 		code = frame.f_code
 		if (os.path.basename(code.co_filename) == 'runpy.py' and os.path.dirname(code.co_filename) in sys.path): continue
 
-		file = code.co_filename
+		filename = code.co_filename
 		name = code.co_name
 		src = srcs[code.co_filename]
 		lines = set()
 		codepos = (first(itertools.islice(code.co_positions(), frame.f_lasti//2, None), default=None) if (sys.version_info >= (3, 11)) else None)
 
-		if (src and lineno > 0):
+		if (src and lineno is not None and lineno > 0):
 			loff = float('inf')
 			found_name = bool()
 
@@ -2476,51 +2573,51 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 			#for i in range(*sorted((frame.f_lineno-1, lineno))):
 			#	lines.add((i+1, src[i]))
 
-		res.append((file, name, lineno, sorted(lines), frame, codepos))
+		res.append((filename, name, lineno, sorted(lines), frame, codepos))
 
 	if (res):
-		print("\033[0;91mTraceback\033[0m \033[2m(most recent call last)\033[0m:", file=_file)
-		maxlnowidth = max((max(len(str(ln)) for ln, line, hline in lines) for file, name, lineno, lines, frame, codepos in res if lines), default=0)
+		print("\033[0;91mTraceback\033[0m \033[2m(most recent call last)\033[0m:", file=file)
+		maxlnowidth = max((max(len(str(ln)) for ln, line, hline in lines) for filename, name, lineno, lines, frame, codepos in res if lines), default=0)
 
 	last = lines = lastlines = None
 	repeated = int()
-	for file, name, lineno, lines, frame, codepos in res:
-		if (os.path.commonpath((os.path.abspath(file), os.getcwd())) != '/'): file = os.path.relpath(file)
+	for filename, name, lineno, lines, frame, codepos in res:
+		if (os.path.commonpath((os.path.abspath(filename), os.getcwd())) != '/'): filename = os.path.relpath(filename)
 
-		if ((file, lineno) != last):
-			if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[0m\n", file=_file); repeated = int()
+		if ((filename, lineno) != last):
+			if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[0m\n", file=file); repeated = int()
 
-			filepath = (os.path.dirname(file)+os.path.sep if (os.path.dirname(file)) else '')
-			link = f'file://{socket.gethostname()}'+os.path.realpath(file) if (os.path.exists(file)) else file
-			if (lines or lineno > 0): print('  File '+terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(file)}\033[0m")+f", in \033[93m{terminal_link(repr(frame.f_globals[name]), name) if (name in frame.f_globals) else name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}", file=_file)
-			else: print('  \033[2mFile '+terminal_link(link, f"\033[36m{filepath}\033[96m{os.path.basename(file)}\033[0;2m")+f", in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[0m", file=_file)
+			filepath = (os.path.dirname(filename)+os.path.sep if (os.path.dirname(filename)) else '')
+			link = (f"file://{socket.gethostname()}"+os.path.realpath(filename) if (os.path.exists(filename)) else filename)
+			if (lines or (lineno is not None and lineno > 0)): print('  File '+terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(filename)}\033[0m")+f", in \033[93m{terminal_link(repr(frame.f_globals[name]), name) if (name in frame.f_globals) else name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}", file=file)
+			else: print('  \033[2mFile '+terminal_link(link, f"\033[36m{filepath}\033[96m{os.path.basename(filename)}\033[0;2m")+f", in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[0m", file=file)
 
 			mlw = int()
 			for ii, (ln, line, hline) in enumerate(lines):
 				mlw = max(mlw, len(line.expandtabs(4)))
-				print(end=' '*(8+(maxlnowidth-len(str(ln)))), file=_file)
-				#if (ln == lineno): print(end='\033[1m', file=_file)  # bold lineno
-				if (ii != len(lines)-1): print(end='\033[2m', file=_file)
-				print(ln, end='\033[0m ', file=_file)
-				print('\033[2m│', end='\033[0m ', file=_file)
+				print(end=' '*(8+(maxlnowidth-len(str(ln)))), file=file)
+				#if (ln == lineno): print(end='\033[1m', file=file)  # bold lineno
+				if (ii != len(lines)-1): print(end='\033[2m', file=file)
+				print(ln, end='\033[0m ', file=file)
+				print('\033[2m│', end='\033[0m ', file=file)
 				if (ln == lineno): hc = 1
 				#elif (ii != len(lines)-1): hc = 2  # dark context lines
 				else: hc = None
 				if (hc is not None):
-					print(end=f"\033[{hc}m", file=_file)
+					print(end=f"\033[{hc}m", file=file)
 					hline = hline.replace(r';00m', rf";00;{hc}m") # TODO FIXME \033
-				print(hline.rstrip().expandtabs(4), end='\033[0m\n', file=_file) #'\033[0m'+ # XXX?
+				print(hline.rstrip().expandtabs(4), end='\033[0m\n', file=file) #'\033[0m'+ # XXX?
 				if (codepos is not None and codepos[0] == ln):
 					nt, sl = S(line).lstripcount('\t')
-					if (codepos[3] < len(sl)): print(' '*(8+maxlnowidth+3 - (codepos[2] <= 1)), ' '*(4*nt), ' '*(codepos[2] - nt - 1), *(('\033[2;95m', '╰', '\033[22m', '╌'*(codepos[3] - codepos[2] + (codepos[2] == 1)), '\033[2m', '╯') if (codepos[3] - codepos[2] > 1+2) else ' \033[2;95m^\033[0m'), sep='', end='\033[0m\n', file=_file)
+					if (codepos[3] < len(sl)): print(' '*(8+maxlnowidth+3 - (codepos[2] <= 1)), ' '*(4*nt), ' '*(codepos[2] - nt - 1), *(('\033[2;95m', '╰', '\033[22m', '╌'*(codepos[3] - codepos[2] + (codepos[2] == 1)), '\033[2m', '╯') if (codepos[3] - codepos[2] > 1+2) else ' \033[2;95m^\033[0m'), sep='', end='\033[0m\n', file=file)
 
 		else:
 			#if (lines == lastlines): repeated += 1 # TODO FIXME XXX: scope
 			if (lines != lastlines or repeated <= 1):
-				if ((lines or lineno > 0) and not lastlines and _linesep is not None): print(end=_linesep, file=_file)
-				print("    \033[2m..."+('\033[0m'*bool(lines or lineno > 0))+f"in \033[93m{name}\033[0m{':'*bool(lines)}", file=_file)
-				if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[0m\n", file=_file); repeated = int()
-		last = (file, lineno)
+				if ((lines or (lineno is not None and lineno > 0)) and not lastlines and _linesep is not None): print(end=_linesep, file=file)
+				print("    \033[2m..."+('\033[0m'*bool(lines or (lineno is not None and lineno > 0)))+f"in \033[93m{name}\033[0m{':'*bool(lines)}", file=file)
+				if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[0m\n", file=file); repeated = int()
+		last = (filename, lineno)
 
 		if (lines and repeated < 2):
 			#try: c = compile(lines[-1][1].strip(), '', 'exec')
@@ -2570,41 +2667,41 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 					except Exception:
 						try: name = terminal_link(str(type(obj)), w)
 						except Exception: name = w
-					print(f"{' '*12}\033[{'2;'*(w not in words_line)}{'2;92' if (ns is frame.f_locals and w in frame.f_code.co_varnames[:frame.f_code.co_argcount]) else '94'}m{name}\033[0;2m:\033[0m \033[2m{v}", file=_file)
+					print(f"{' '*12}\033[{'2;'*(w not in words_line)}{'2;92' if (ns is frame.f_locals and w in frame.f_code.co_varnames[:frame.f_code.co_argcount]) else '94'}m{name}\033[0;2m:\033[0m \033[2m{v}", file=file)
 
-			if (_linesep is not None): print(end=_linesep, file=_file)
-		elif (not lastlines and _linesep is not None): print(end=_linesep, file=_file)
+			if (_linesep is not None): print(end=_linesep, file=file)
+		elif (not lastlines and _linesep is not None): print(end=_linesep, file=file)
 		lastlines = lines
 
-	if (repeated): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m times)\033[0m\n", file=_file); repeated = int() # TODO FIXME needed?
+	if (repeated): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m times)\033[0m\n", file=file); repeated = int() # TODO FIXME needed?
 
-	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[0;2m{exctype.__name__}\033[0m", file=_file)
+	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[0;2m{exctype.__name__}\033[0m", file=file)
 	elif (exctype is SyntaxError and exc.args):
 		try: line = highlight(exc.text)
 		except Exception: line = exc.text
-		print(f"\033[0;1;96m{exctype.__name__}\033[0m: {exc}", file=_file)
-		if (line is not None): print(f"{line.rstrip().expandtabs(1)}\n{' '*(exc.offset-1)}\033[95m{'^'*max(1, exc.end_offset - exc.offset)}\033[0m", file=_file)
-	else: print(f"\033[0;1;91m{exctype.__name__}\033[0m{': '*bool(str(exc))}{exc}", file=_file)
+		print(f"\033[0;1;96m{exctype.__name__}\033[0m: {exc}", file=file)
+		if (line is not None): print(f"{line.rstrip().expandtabs(1)}\n{' '*(exc.offset-1)}\033[95m{'^'*max(1, exc.end_offset - exc.offset)}\033[0m", file=file)
+	elif (exc is not None): print(f"\033[0;1;91m{exctype.__name__}\033[0m{': '*bool(str(exc))}{exc}", file=file)
 
-	if (exc.__cause__ is not None):
-		print(" \033[0;1m> This exception was caused by:\033[0m\n", file=_file)
-		Sexcepthook(exc.__cause__, file=_file, linesep=_linesep)
+	if (exc is not None and exc.__cause__ is not None):
+		print(" \033[0;1m> This exception was caused by:\033[0m\n", file=file)
+		Sexcepthook(exc.__cause__, file=file, linesep=_linesep)
 
 	if (__repl__ and tb is not None and tb.tb_frame.f_code.co_filename == '<stdin>'):
 		if (exctype is NameError and exc.args and
-		    (m := re.fullmatch(r"name '(.*)' is not defined", exc.args[0])) is not None and
+		    (m := re.fullmatch(r"name '(\w+)' is not defined", exc.args[0])) is not None and
 		    (module := importlib.util.find_spec(m[1])) is not None):
-			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[0m", file=_file)
+			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[0m", file=file)
 			frame.f_globals[m[1]] = module.loader.load_module()
 			#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
 		elif (exctype is AttributeError and exc.args and
-		      (m := re.fullmatch(r"module '(.*)' has no attribute '(.*)'", exc.args[0])) is not None and
-		      (module := importlib.util.find_spec(m[1]+'.'+m[2])) is not None):
-			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[0m", file=_file)
-			setattr(frame.f_globals[m[1]], m[2], module.loader.load_module())
+		      (m := re.fullmatch(r"module '(\w+)(.+)?' has no attribute '(\w+)'", exc.args[0])) is not None and
+		      (module := importlib.util.find_spec(m[1]+(m[2] or '')+'.'+m[3])) is not None):
+			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[0m", file=file)
+			setattr((operator.attrgetter(m[2].removeprefix('.'))(frame.f_globals[m[1]]) if (m[2]) else frame.f_globals[m[1]]), m[3], module.loader.load_module())
 			#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
 
-	print(end='\033[0m')
+	print(end='\033[0m', file=file, flush=True)
 
 def _Sexcepthook_install():
 	if (sys.excepthook is not Sexcepthook):
@@ -2613,10 +2710,11 @@ def _Sexcepthook_install():
 Sexcepthook.install = _Sexcepthook_install
 if (sys.stderr.isatty()): Sexcepthook.install()
 
-def getsrc(x, *, color=True, clear_term=True, ret=False):
+def getsrc(x, *, color=None, clear_term=True, ret=False):
+	if (color is None): color = (not ret and sys.stdout.isatty())
 	if (clear_term): clear()
 	r = inspect.getsource(x)
-	if (color and sys.stderr.isatty()): r = highlight(r)
+	if (color): r = highlight(r)
 	if (ret): return r
 	else: print(r)
 
@@ -2654,7 +2752,7 @@ class _CStream: # because I can.
 		return ('\033[F' if (sys.flags.interactive) else super().__repr__())
 class IStream(_CStream):
 	def __rshift__(self, x):
-		globals = inspect.stack()[1].frame.f_globals
+		globals = inspect.stack(0)[1].frame.f_globals
 		globals[x] = type(globals.get(x, ''))(self.ifd.readline().rstrip('\n')) # obviousity? naaooo
 		return self
 class OStream(_CStream):
@@ -2675,12 +2773,12 @@ class NonLoggingException(Exception): pass
 
 def exit(c=None, code=None, raw=False, nolog=None):
 	if (nolog is None): nolog = not any(log._logged_start)
-		#name = inspect.stack()[1].frame.f_globals.get('__name__')
+		#name = inspect.stack(0)[1].frame.f_globals.get('__name__')
 		#nolog = not (name is not None and log._logged_start.get(name))
 	if (not nolog and sys.stderr.isatty()): print('\r\033[K', file=sys.stderr, flush=True)
 	unlocklog()
 	db.save(nolog=True)
-	if (not nolog): log(f'{c}' if (raw) else f'Exit: {c}' if (c and type(c) == str or hasattr(c, 'args') and c.args) else 'Exit.')
+	if (not nolog): log(f"{c}" if (raw) else f"Exit: {c}" if (c and type(c) == str or hasattr(c, 'args') and c.args) else "Exit.")
 	if (logfile): logfile.flush()
 	try: sys.exit(int(bool(c)) if (code is not None) else code)
 	finally:
@@ -2693,7 +2791,7 @@ def setonsignals(f=exit):
 logstart('Utils')
 if (__name__ == '__main__'):
 	testprogress()
-	log('\033[0mWhy\033[0;2m are u trying to run me?! It \033[0;93mtickles\033[0;2m!..\033[0m', raw=True)
+	log("\033[0mWhy\033[0;2m are u trying to run me?! It \033[0;93mtickles\033[0;2m!..\033[0m", raw=True)
 else: logimported()
 
 # by Sdore, 2021-24
