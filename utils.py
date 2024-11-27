@@ -155,7 +155,7 @@ def md5(x, n=1): x = x if (isinstance(x, bytes)) else str(x).encode(); return ha
 def b64(x): return base64.b64encode(x if (isinstance(x, bytes)) else str(x).encode()).decode()
 def ub64(x): return base64.b64decode(x).decode()
 def randstr(n=16, *, caseless=False, seed=None): return str().join((random.Random(seed) if (seed is not None) else random).choices(string.ascii_lowercase if (caseless) else string.ascii_letters, k=n))
-def try_repr(x):
+def try_repr(x) -> str:
 	try: return repr(x)
 	except Exception: return object.__repr__(x)
 def try_eval(*args, **kwargs):
@@ -165,7 +165,7 @@ def safeexec():
 	try:
 		print(end='\033[2m>>> ', file=sys.stderr, flush=True)
 		return exec(sys.stdin.readline())
-	finally: print(end='\033[0m', file=sys.stderr, flush=True)
+	finally: print(end='\033[m', file=sys.stderr, flush=True)
 def export(x):
 	globals = inspect.stack(0)[1].frame.f_globals
 	all = globals.setdefault('__all__', [])
@@ -174,7 +174,8 @@ def export(x):
 	except AttributeError:
 		try: name = x.__name__
 		except AttributeError: name = x.__class__.__name__
-	all.append(name.rpartition('.')[-1])
+	name = name.rpartition('.')[-1]
+	if (name not in all): all.append(name)
 	return x
 def suppress_tb(f):
 	f.__code__ = code_with(f.__code__, name=f.__qualname__, firstlineno=0, **{'linetable' if (sys.version_info >= (3, 10)) else 'lnotab': (b'\xff'*(len(f.__code__.co_code)//2+1) if (sys.version_info >= (3, 11)) else b'')})
@@ -553,7 +554,7 @@ def funcdecorator(df=None, /, *, signature=None, suppresstb=True): # TODO: __dic
 			inspect.signature(nf)  # validate
 		else: nf.__signature__ = inspect.signature(f)
 
-		nf.__code__ = code_with(nf.__code__, name=f"<decorated '{f.__code__.co_name}'>" if (not f.__code__.co_name.startswith('<decorated ')) else f.__code__.co_name)
+		nf.__code__ = code_with(nf.__code__, name=f"<decorated {f.__code__.co_name}>" if (not f.__code__.co_name.startswith('<decorated ')) else f.__code__.co_name)
 
 		for i in filter(lambda x: not x.startswith('__'), dir(f)):
 			setattr(nf, i, getattr(f, i))
@@ -578,7 +579,7 @@ def funcdecorator(df=None, /, *, signature=None, suppresstb=True): # TODO: __dic
 class DispatchError(TypeError): pass
 
 class dispatch:
-	""" Decorator which implements function overloading (dispatching) by argument and return type decorations. """
+	""" Decorator which implements function overloading (call dispatching) by argument and return type annotations. """
 
 	class __FillValue: __slots__ = ()
 	__FillValue = __FillValue()
@@ -606,33 +607,28 @@ class dispatch:
 	def __init__(self, f):
 		self.__origname__, self.__origmodule__ = f.__name__, f.__module__
 		self.__qualname__ = f.__qualname__
-		self.__call__ = method(function(code_with(self.___call__.__code__, name=f"<overload handler of '{self.__qualname__}'>"), self.___call__.__globals__), self)
+		self.__call__ = method(function(code_with(self.___call__.__code__, name=f"<overload handler of {self.__qualname__}>"), self.___call__.__globals__), self)
 
-		if (getattr(f, '__signature__', None) is ...): del f.__signature__ # TODO FIXME ???
-		f.__annotations__ = _inspect_get_annotations(f, eval_str=True)
-		fsig = inspect.signature(f)
+		fsig = _inspect_signature(f, eval_str=True)
 		params_annotation = tuple(map(self.__Param.from_inspect_parameter, fsig.parameters.values()))
 
 		self.__overloaded_functions[self.__origmodule__, self.__qualname__][params_annotation, fsig.return_annotation] = f
 		self.__overloaded_functions_docstrings[self.__origmodule__, self.__qualname__][fsig] = f.__doc__
 
-		wf = f
-		while (True):
-			try: wf = wf.__wrapped__
-			except AttributeError: break
+		wf = inspect.unwrap(f)
 
 		f.__origname__, f.__name__ = f.__name__, f"Overloaded {f.__name__}"
-		wf.__code__ = code_with(wf.__code__, name=f"<overloaded '{f.__qualname__}' for {f.__origname__}{format_inspect_signature(fsig)}>")
+		wf.__code__ = code_with(wf.__code__, name=f"<overloaded {f.__qualname__} for {f.__origname__}{format_inspect_signature(fsig)}>")
 
-		#print(f"\n\033[1;92m{self.__qualname__}()\033[0;1m:\033[0m")
+		#print(f"\n\033[1;92m{self.__qualname__}()\033[0;1m:\033[m")
 		#for params, retval in self.__overloaded_functions[self.__origmodule__, self.__qualname__]:
 		#	print("     \N{bullet}", end='')
 		#	for param in params:
-		#		print(f"\t\033[1;93m{param.name}\033[0m: \033[1;94m{format_inspect_annotation(param.type)}\033[0m\n\t  \033[2m({param.kind.name}, {'default' if (not param.required) else 'required'})\033[0m\n")
+		#		print(f"\t\033[1;93m{param.name}\033[m: \033[1;94m{format_inspect_annotation(param.type)}\033[m\n\t  \033[2m({param.kind.name}, {'default' if (not param.required) else 'required'})\033[m\n")
 		#	print()
 
 	def __repr__(self):
-		return f"<overloaded function '{self.__qualname__}'>"
+		return f"<overloaded function {self.__qualname__}>"
 
 	@suppress_tb
 	def ___call__(self, *args, **kwargs):
@@ -641,7 +637,7 @@ class dispatch:
 		r = f(*args, **kwargs)
 
 		if (retval is not inspect._empty):
-			if (not self.__typecheck(r, retval)): raise DispatchError(f"Return value of type {type(r)} doesn't match the return annotation of the corresponding '{self.__qualname__}' signature:\n  {self.__origname__}{_format_inspect_signature({i.name: i for i in params}, retval)}\n[called as: {self.__origname__}({', '.join((*(S(try_repr(i)).fit(32) for i in args), *(S(f'{k}={try_repr(v)}').fit(32) for k, v in kwargs.items())))})]")
+			if (not self.__typecheck(r, retval)): raise DispatchError(f"Return value of type {type(r)} doesn't match the return annotation of the corresponding '{self.__qualname__}' signature:\n  {self.__origname__}{_format_inspect_signature({i.name: i for i in params}, retval, _call_lambdas=True)}\n[called as: {self.__origname__}({', '.join((*(S(try_repr(i)).fit(32) for i in args), *(S(f'{k}={try_repr(v)}').fit(32) for k, v in kwargs.items())))})]")
 
 		return r
 
@@ -654,8 +650,7 @@ class dispatch:
 	@suppress_tb
 	def __dispatch(self, *args, **kwargs):
 		for (params, retval), func in self.__overloaded_functions[self.__origmodule__, self.__qualname__].items():
-			func.__annotations__ = _inspect_get_annotations(func, eval_str=True)
-			fsig = inspect.signature(func)
+			fsig = _inspect_signature(func, eval_str=True)
 
 			for args_ in (args, args[1:]) if (isinstance(func, staticmethod)) else (args,):
 				try: bound = fsig.bind(*args_, **kwargs)
@@ -688,24 +683,39 @@ class dispatch:
 		raise DispatchError(f"Parameters {S(', ').join((*(format_inspect_annotation(type(i)) for i in args), *(f'{k}: {format_inspect_annotation(type(v))}' for k, v in kwargs.items()))).join('()')} don't match {'any of' if (len(sigs) > 1) else 'the'} '{self.__qualname__}' signature{'s'*(len(sigs) > 1)}:\n{'  • '+f'{NL}  • '.join(sigs) if (len(sigs) > 1) else f'    {only(sigs)}'}\n[called as: {self.__origname__}({', '.join((*(S(try_repr(i)).fit(32) for i in args), *(S(f'{k}={try_repr(v)}').fit(32) for k, v in kwargs.items())))})]")
 
 	@classmethod
-	def __typecheck(cls, o, t):
+	def __typecheck(cls, o, t) -> bool:
 		if (t is None or t is inspect._empty): return True
 		if (o is cls.__FillValue or t is cls.__FillValue): return False
 
+		if (isinstance(t, function) and t.__code__.co_argcount == 0): return cls.__typecheck(o, t())
 		if (isinstance(t, (function, builtin_function_or_method, method_descriptor))): return bool(t(o))
+
+		origin, args = typing.get_origin(t), typing.get_args(t)
+		# TODO: (list[int], list)
 
 		if (isinstance(t, typing.TypeVar)):
 			if (not isinstance(o, typing_inspect.get_constraints(t))): return False
-		elif (hasattr(types, 'UnionType') and isinstance(t, (types.UnionType, typing._UnionGenericAlias))): # TODO FIXME: typing_inspect.is_optional_type()?
-			if (not any(cls.__typecheck(o, i) for i in typing.get_args(t))): return False
+		elif (typing_inspect.is_literal_type(t)):
+			return (o in args)
+		elif (typing_inspect.is_union_type(t)):
+			if (not any(cls.__typecheck(o, i) for i in args)): return False
 			else: return True
-		elif (typing_inspect.is_literal_type(t)): # TODO FIXME: broaden the case
-			return (o in typing.get_args(t))
-		else:
-			if (not isinstance(o, typing_inspect.get_origin(t) or t)): return False
+		elif (not args):
+			if (not isinstance(o, (origin or t))): return False
 
-		if (args := typing_inspect.get_args(t)):
-			if ((origin := typing_inspect.get_origin(t)) is not None and issubclass(origin, typing.Tuple) and isinstance(o, typing.Tuple)):
+		if (args):
+			if (origin is not None and issubclass(origin, type)):
+				tt = only(args)
+				tto = (typing.get_origin(tt) or tt)
+				oo = (typing.get_origin(o) or o)
+				if (not (oo is tto or isinstance(oo, type) and issubclass(oo, tto))): return False
+				if (typing_inspect.is_generic_type(tt)):
+					if (not all(j for i in args for j in itertools.starmap(lambda a, b: a and b and issubclass(a, b), itertools.zip_longest(*map(typing.get_args, (o, i)))))): return False
+			elif (origin is not None and issubclass(origin, typing.Tuple) and isinstance(o, typing.Tuple)):
+				args = list(args)
+				try: ei = args.index(...)
+				except ValueError: pass
+				else: args[ei:ei+1] = (((args[ei-1] if (ei > 0) else None),)*(len(o) - len(args) + 1) if (len(args) >= 2) else (cls.__FillValue,))
 				if (not all(itertools.starmap(cls.__typecheck, itertools.zip_longest(o, args, fillvalue=cls.__FillValue)))): return False
 			elif (isinstance(o, typing.Iterable) and not isinstance(o, typing.Iterator)):
 				if (not all(cls.__typecheck(i, args[0]) for i in o)): return False
@@ -713,7 +723,7 @@ class dispatch:
 		return True
 
 	def format_signatures(self, sep='\n\n'):
-		return sep.join(Sstr().join((self.__qualname__, format_inspect_signature(fsig), ':\n\b    '+doc if (doc) else '')) for fsig, doc in self.__overloaded_functions_docstrings[self.__origmodule__, self.__qualname__].items() if fsig is not None)
+		return sep.join(Sstr().join((self.__qualname__, format_inspect_signature(fsig, _call_lambdas=True), ':\n\b    '+doc if (doc) else '')) for fsig, doc in self.__overloaded_functions_docstrings[self.__origmodule__, self.__qualname__].items() if fsig is not None)
 
 	#@funcdecorator
 	@classmethod
@@ -742,8 +752,8 @@ class dispatch:
 
 def dispatch_meta(f): logexception(DeprecationWarning("*** @dispatch_meta → @dispatch.meta ***")); return dispatch.meta(f)
 
-def format_inspect_signature(fsig): return _format_inspect_signature(fsig.parameters, fsig.return_annotation)
-def _format_inspect_signature(parameters, return_annotation=inspect._empty):
+def format_inspect_signature(fsig, *, _call_lambdas=False): return _format_inspect_signature(fsig.parameters, fsig.return_annotation, _call_lambdas=_call_lambdas)
+def _format_inspect_signature(parameters, return_annotation=inspect._empty, *, _call_lambdas=False):
 	result = list()
 	posonlysep = False
 	kwonlysep = True
@@ -753,22 +763,30 @@ def _format_inspect_signature(parameters, return_annotation=inspect._empty):
 		elif (posonlysep): result.append('/'); posonlysep = False
 		if (p.kind == inspect.Parameter.VAR_POSITIONAL): kwonlysep = False
 		elif (p.kind == inspect.Parameter.KEYWORD_ONLY and kwonlysep): result.append('*'); kwonlysep = False
-		result.append(f"{'*' if (p.kind == inspect.Parameter.VAR_POSITIONAL) else '**' if (p.kind == inspect.Parameter.VAR_KEYWORD) else ''}{p.name}{f': {format_inspect_annotation(p.annotation)}' if (p.annotation is not inspect._empty) else ''}{f' = {repr(p.default)}' if (p.annotation is not inspect._empty and p.default is not inspect._empty) else f'={repr(p.default)}' if (p.default is not inspect._empty) else ''}")
+		result.append(f"{'*' if (p.kind == inspect.Parameter.VAR_POSITIONAL) else '**' if (p.kind == inspect.Parameter.VAR_KEYWORD) else ''}{p.name}{f': {format_inspect_annotation(p.annotation, _call_lambdas=_call_lambdas)}' if (p.annotation is not inspect._empty) else ''}{f' = {repr(p.default)}' if (p.annotation is not inspect._empty and p.default is not inspect._empty) else f'={repr(p.default)}' if (p.default is not inspect._empty) else ''}")
 
 	if (posonlysep): result.append('/')
 	rendered = ', '.join(result).join('()')
 	if (return_annotation is not inspect._empty): rendered += f" -> {format_inspect_annotation(return_annotation)}"
 	return rendered
 
-def format_inspect_annotation(annotation):
-	if (isinstance(annotation, function)): return annotation.__name__
+def format_inspect_annotation(annotation, *, _call_lambdas=False):
+	if (isinstance(annotation, function)):
+		if (_call_lambdas and annotation.__code__.co_argcount == 0):
+			try: return format_inspect_annotation(annotation())
+			except NameError: pass
+		return annotation.__name__
 	if (isinstance(annotation, tuple)): return ', '.join(map(format_inspect_annotation, annotation)).join('()')
 	return inspect.formatannotation(annotation)
 
+def _inspect_signature(*args, **kwargs) -> inspect.Signature:
+	if (sys.version_info < (3, 10)): kwargs.pop('eval_str', None)
+	return inspect.signature(*args, **kwargs)
+
 def _inspect_get_annotations(x, *, globals=None, locals=None, eval_str=False):
-	try: get_annotations = inspect.get_annotations
+	try: _get_annotations = inspect.get_annotations
 	except AttributeError: pass
-	else: return get_annotations(x, globals=globals, locals=locals, eval_str=eval_str)
+	else: return _get_annotations(x, globals=globals, locals=locals, eval_str=eval_str)
 
 	try: res = x.__annotations__.copy()
 	except AttributeError: return {}
@@ -800,7 +818,7 @@ def cast(*types): return lambda x: (t(i) if (not isinstance(i, t)) else i for t,
 @suppress_tb
 def cast_call(f, *args, **kwargs):
 	(f.__func__ if (isinstance(f, method)) else f).__annotations__ = get_annotations(f)
-	fsig = inspect.signature(f)
+	fsig = _inspect_signature(f, eval_str=True)
 	try:
 		args = [(v.annotation)(args[ii]) if (v.annotation is not inspect._empty and not isinstance(args[ii], v.annotation)) else args[ii] for ii, (k, v) in enumerate(fsig.parameters.items()) if ii < len(args)]
 		kwargs = {k: (fsig.parameters[k].annotation)(v) if (k in fsig.parameters and fsig.parameters[k].annotation is not inspect._empty and not isinstance(v, fsig.parameters[k].annotation)) else v for k, v in kwargs.items()}
@@ -971,8 +989,8 @@ def allslots(cls: type):
 def allslots(obj): return allslots(type(obj))
 
 def spreadargs(f, okwargs, *args, **akwargs):
-	fsig = inspect.signature(f)
-	kwargs = S(okwargs) & akwargs
+	fsig = _inspect_signature(f, eval_str=True)
+	kwargs = (S(okwargs) & akwargs)
 	try: kwnames = tuple(i[0] for i in fsig.parameters.items() if (assert_(i[1].kind != inspect.Parameter.VAR_KEYWORD) and i[1].kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)))
 	except AssertionError: kwnames = kwargs.keys()
 	for i in kwnames:
@@ -1056,9 +1074,9 @@ def log(l=None, *x, sep=' ', end='\n', fileend=None, ll=None, raw=False, tm=None
 		elif (isinstance(tm, datetime.datetime)): tm = tm.strftime('[%x %X]')
 		elif (isinstance(tm, datetime.date)): tm = tm.strftime('[%x]')
 		elif (isinstance(tm, datetime.time)): tm = tm.strftime('[%X]')
-		if (tm): tm = f"{fc}{tm}\033[0m"
-		if (ll is None): ll = (f"{fc}[\033[1m{lc}LV{l}{fc.replace('[', '[0;')}]\033[0m" if (l is not None) else '')
-		logstr = f"\033[K{tm}{' '*bool(tm)}{ll}{' '*bool(ll)}\033[1m{x}\033[0m"
+		if (tm): tm = f"{fc}{tm}\033[m"
+		if (ll is None): ll = (f"{fc}[\033[1m{lc}LV{l}{fc.replace('[', '[0;')}]\033[m" if (l is not None) else '')
+		logstr = f"\033[K{tm}{' '*bool(tm)}{ll}{' '*bool(ll)}\033[1m{x}\033[m"
 	else: logstr = str(x)
 
 	if (unlock and not log._loglock.empty()):
@@ -1089,11 +1107,11 @@ def logstart(x):
 	#if ((name := inspect.stack(0)[1].frame.f_globals.get('__name__')) is not None):
 	if (log._logged_start.get(x) is True): return
 	log._logged_start[x] = True
-	log(x+'\033[0m...', end=' ') #, nolog=(x == 'Utils'))
+	log(x+'\033[m...', end=' ') #, nolog=(x == 'Utils'))
 	locklog()
 def logstate(state, x=''):
 	if (log._logged_utils_start is False): log._logged_utils_start = (state, x); return
-	log(state+(': '+str(x))*bool(str(x))+'\033[0m', raw=True, unlock=True)
+	log(state+(': '+str(x))*bool(str(x))+'\033[m', raw=True, unlock=True)
 def logstarted(x=''): """ if (__name__ == '__main__'): logstart(); main() """; logstate('\033[94mstarted', x)
 def logimported(x=''): """ if (__name__ != '__main__'): logimported() """; logstate('\033[96mimported', x)
 def logok(x=''): logstate('\033[92mok', x)
@@ -1122,7 +1140,7 @@ def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=Fal
 	if (once):
 		if (repr(ex) in _logged_exceptions): return
 		_logged_exceptions.add(repr(ex))
-	e = (dlog if (_dlog) else log)(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+ex.__class__.__qualname__+(' on line '+' -> '.join(terminal_link((f"file://{socket.gethostname()}" + os.path.realpath(i[0].f_code.co_filename)) if (os.path.exists(i[0].f_code.co_filename)) else i[0].f_code.co_filename, i[1]) for i in traceback.walk_tb(ex.__traceback__) if i[1])).removesuffix(' on line')+'\033[0m'+(': '+str(ex))*bool(str(ex))+('\033[0;2m; ('+str(extra)+')\033[0m' if (extra is not None) else ''), raw=raw, nolog=nolog, **kwargs)
+	e = (dlog if (_dlog) else log)(('\033[91m'+'Caught '*_caught if (not isinstance(ex, Warning)) else '\033[93m' if ('warning' in ex.__class__.__name__.casefold()) else '\033[91m')+ex.__class__.__qualname__+(' on line '+' -> '.join(terminal_link((f"file://{socket.gethostname()}" + os.path.realpath(i[0].f_code.co_filename)) if (os.path.exists(i[0].f_code.co_filename)) else i[0].f_code.co_filename, i[1]) for i in traceback.walk_tb(ex.__traceback__) if i[1])).removesuffix(' on line')+'\033[m'+(': '+str(ex))*bool(str(ex))+('\033[0;2m; ('+str(extra)+')\033[m' if (extra is not None) else ''), raw=raw, nolog=nolog, **kwargs)
 	if (not nohandlers):
 		for i in log._exc_handlers:
 			try: i(e, ex)
@@ -1592,7 +1610,7 @@ class TaskTree(NodesTree):
 
 	@staticmethod
 	def format_task(t):
-		return f"\033[{93 if (t.state is None) else 91 if (not t.state) else 92}m{t.title}\033[0m"
+		return f"\033[{93 if (t.state is None) else 91 if (not t.state) else 92}m{t.title}\033[m"
 
 def validate(l, d, nolog=False):
 	for i in d:
@@ -1601,7 +1619,7 @@ def validate(l, d, nolog=False):
 			r = eval(e.format(t(l[i]))) if (type(e) == str) else e(t(l[i]))
 			if (bool(r) == False): raise ValidationError(r)
 		except Exception as ex:
-			if (not nolog): log(2, "\033[91mValidation error:\033[0m %s" % ex)
+			if (not nolog): log(2, "\033[91mValidation error:\033[m %s" % ex)
 			return False
 	return True
 class ValidationError(AssertionError): pass
@@ -1705,7 +1723,7 @@ class SingletonMeta(type):
 		return r
 class Singleton(metaclass=SingletonMeta):
 	def __repr__(self):
-		return f"<Singleton '{self.__class__.__qualname__}'>"
+		return f"<Singleton {self.__class__.__qualname__}>"
 
 @singleton
 class clear:
@@ -2137,7 +2155,7 @@ class SlotsTypecheckMeta(type):
 			try: ra = get_annotations(v)['return']
 			except KeyError: continue
 			if (k in annotations):
-				if ((a := annotations[k]) is not ... and ra != a and not issubclass(typing.get_origin(ra) or ra, typing.get_origin(a) or a)):
+				if ((a := annotations[k]) is not ... and ra != a and not dispatch._dispatch__typecheck(ra, a)):
 					raise TypeError(f"Specified property type annotation ('{k} -> {format_inspect_annotation(ra)}') is not a subclass of its slot annotation ('{k}: {format_inspect_annotation(a)}')")
 			else: annotations[k] = ra
 
@@ -2148,8 +2166,8 @@ class SlotsTypecheckMeta(type):
 		                                                                                        and 'return' in get_annotations(v)
 		                                                                                    }).items()
 		                                                 } for c in S((*bases, *(j for i in bases for j in i.mro()))).uniquize()[::-1]), {}).items():
-			if (v is not ... and (a := annotations.get(k)) and a != v and not (isinstance(ac := (typing.get_origin(a) or a), type) and issubclass(ac, typing.get_origin(v) or v))):
-				raise TypeError(f"Specified slot type annotation (class {name}, '{k}: {format_inspect_annotation(a)}') is not a subclass of its parent's annotation (class {c.__name__}, '{k}: {format_inspect_annotation(v)}')")
+			if (v is not ... and (a := annotations.get(k)) and a != v and not (isinstance(a, type) and dispatch._dispatch__typecheck(a, v))):
+				raise TypeError(f"Specified slot type annotation in class {name!r} ({k}: {format_inspect_annotation(a)}) is not a subclass of its parent's annotation in class {c.__name__!r} ({k}: {format_inspect_annotation(v)}).")
 
 		return super().__new__(metacls, name, bases, classdict)
 class SlotsTypecheck(metaclass=SlotsTypecheckMeta): pass
@@ -2537,7 +2555,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 
 	if (exc is not None and exc.__context__ is not None and not exc.__suppress_context__):
 		Sexcepthook(exc.__context__, file=file, linesep=_linesep)
-		print(" \033[0;1m> During handling of the above exception, another exception occurred:\033[0m\n", file=file)
+		print(" \033[0;1m> During handling of the above exception, another exception occurred:\033[m\n", file=file)
 
 	for frame, lineno in traceback.walk_tb(tb):
 		code = frame.f_code
@@ -2564,7 +2582,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 					loff = cloff
 					try: hline = highlight(line)
 					except Exception: hline = line
-					if (not found_name and re.fullmatch(fr"\s*(?:def|class)\s+{name}\b.*(:|\(|\\)\s*(?:#.*)?", line)):
+					if (not found_name and name.isidentifier() and re.fullmatch(fr"\s*(?:def|class)\s+{name}\b.*(:|\(|\\)\s*(?:#.*)?", line)):
 						hline = re.sub(fr"((?:def|class)\s+)({name})\b", '\\1\033[0;93m\\2\033[0;2m', hline, 1)
 						found_name = True
 					lines.add((i+1, line, hline))
@@ -2576,7 +2594,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 		res.append((filename, name, lineno, sorted(lines), frame, codepos))
 
 	if (res):
-		print("\033[0;91mTraceback\033[0m \033[2m(most recent call last)\033[0m:", file=file)
+		print("\033[0;91mTraceback\033[m \033[2m(most recent call last)\033[m:", file=file)
 		maxlnowidth = max((max(len(str(ln)) for ln, line, hline in lines) for filename, name, lineno, lines, frame, codepos in res if lines), default=0)
 
 	last = lines = lastlines = None
@@ -2585,12 +2603,12 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 		if (os.path.commonpath((os.path.abspath(filename), os.getcwd())) != '/'): filename = os.path.relpath(filename)
 
 		if ((filename, lineno) != last):
-			if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[0m\n", file=file); repeated = int()
+			if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[m\n", file=file); repeated = int()
 
 			filepath = (os.path.dirname(filename)+os.path.sep if (os.path.dirname(filename)) else '')
 			link = (f"file://{socket.gethostname()}"+os.path.realpath(filename) if (os.path.exists(filename)) else filename)
-			if (lines or (lineno is not None and lineno > 0)): print('  File '+terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(filename)}\033[0m")+f", in \033[93m{terminal_link(repr(frame.f_globals[name]), name) if (name in frame.f_globals) else name}\033[0m, line \033[94m{lineno}\033[0m{':'*bool(lines)}", file=file)
-			else: print('  \033[2mFile '+terminal_link(link, f"\033[36m{filepath}\033[96m{os.path.basename(filename)}\033[0;2m")+f", in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[0m", file=file)
+			if (lines or (lineno is not None and lineno > 0)): print('  File '+terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(filename)}\033[m")+f", in \033[93m{terminal_link(repr(frame.f_globals[name]), name) if (name in frame.f_globals) else name}\033[m, line \033[94m{lineno}\033[m{':'*bool(lines)}", file=file)
+			else: print('  \033[2mFile '+terminal_link(link, f"\033[36m{filepath}\033[96m{os.path.basename(filename)}\033[0;2m")+f", in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[m", file=file)
 
 			mlw = int()
 			for ii, (ln, line, hline) in enumerate(lines):
@@ -2598,25 +2616,25 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 				print(end=' '*(8+(maxlnowidth-len(str(ln)))), file=file)
 				#if (ln == lineno): print(end='\033[1m', file=file)  # bold lineno
 				if (ii != len(lines)-1): print(end='\033[2m', file=file)
-				print(ln, end='\033[0m ', file=file)
-				print('\033[2m│', end='\033[0m ', file=file)
+				print(ln, end='\033[m ', file=file)
+				print('\033[2m│', end='\033[m ', file=file)
 				if (ln == lineno): hc = 1
 				#elif (ii != len(lines)-1): hc = 2  # dark context lines
 				else: hc = None
 				if (hc is not None):
 					print(end=f"\033[{hc}m", file=file)
 					hline = hline.replace(r';00m', rf";00;{hc}m") # TODO FIXME \033
-				print(hline.rstrip().expandtabs(4), end='\033[0m\n', file=file) #'\033[0m'+ # XXX?
+				print(hline.rstrip().expandtabs(4), end='\033[m\n', file=file) #'\033[m'+ # XXX?
 				if (codepos is not None and codepos[0] == ln):
 					nt, sl = S(line).lstripcount('\t')
-					if (codepos[3] < len(sl)): print(' '*(8+maxlnowidth+3 - (codepos[2] <= 1)), ' '*(4*nt), ' '*(codepos[2] - nt - 1), *(('\033[2;95m', '╰', '\033[22m', '╌'*(codepos[3] - codepos[2] + (codepos[2] == 1)), '\033[2m', '╯') if (codepos[3] - codepos[2] > 1+2) else ' \033[2;95m^\033[0m'), sep='', end='\033[0m\n', file=file)
+					if (codepos[3] < len(sl)): print(' '*(8+maxlnowidth+3 - (codepos[2] <= 1)), ' '*(4*nt), ' '*(codepos[2] - nt - 1), *(('\033[2;95m', '╰', '\033[22m', '╌'*(codepos[3] - codepos[2] + (codepos[2] == 1)), '\033[2m', '╯') if (codepos[3] - codepos[2] > 1+2) else ' \033[2;95m^\033[m'), sep='', end='\033[m\n', file=file)
 
 		else:
 			#if (lines == lastlines): repeated += 1 # TODO FIXME XXX: scope
 			if (lines != lastlines or repeated <= 1):
 				if ((lines or (lineno is not None and lineno > 0)) and not lastlines and _linesep is not None): print(end=_linesep, file=file)
-				print("    \033[2m..."+('\033[0m'*bool(lines or (lineno is not None and lineno > 0)))+f"in \033[93m{name}\033[0m{':'*bool(lines)}", file=file)
-				if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[0m\n", file=file); repeated = int()
+				print("    \033[2m..."+('\033[m'*bool(lines or (lineno is not None and lineno > 0)))+f"in \033[93m{name}\033[m{':'*bool(lines)}", file=file)
+				if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[m\n", file=file); repeated = int()
 		last = (filename, lineno)
 
 		if (lines and repeated < 2):
@@ -2627,7 +2645,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 			words = list()
 			words_line = set()
 			for ii, l in enumerate(lines, 1):
-				for w in regex.findall(r'(?<=^|[^.[])(\w+|[.\[]\w+[\]]?)', l[1]):
+				for w in regex.findall(r'(?<=^|[^.[])(\w+|\.\w+|\[[\w-]+\]?)', l[1]):
 					if (words and (w.startswith('.') or w.startswith('['))): w = (words[-1] + w) #words[-1] += w
 					words.append(w)
 					if (ii == len(lines)): words_line.add(w)
@@ -2637,71 +2655,76 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 				if (keyword.iskeyword(w)): continue
 
 				v = None
-				#if (any(map(w.startswith, inaccessible))): v = '\033[3;90m<inaccessible>\033[0m'
+				#if (any(map(w.startswith, inaccessible))): v = '\033[3;90m<inaccessible>\033[m'
 				for color, ns in ((93, frame.f_locals), (92, frame.f_globals), (95, builtins.__dict__)):
 					#try: r = S(repr(obj := operator.attrgetter(w)(S(ns)))).indent(first=False)
 					try:
-						obj = Sdict(ns)
-						for i in w.split('.'):
-							obj = eval('_.'+i, {'_': obj})
-					except Exception: continue
-
-					try: r = S(repr(obj)).noesc().indent(first=False)
+						try:
+							obj = Sdict(ns)
+							for i in w.split('.'):
+								obj = eval('_.'+i, {'_': obj})
+						except (SyntaxError, AttributeError): continue
+						else: r = S(repr(obj)).noesc()
 					except Exception as ex:
 						if (any(map(w.startswith, inaccessible))): continue
 						inaccessible.add(w)
 						color, r = 91, S(f"<exception in {w}.__repr__(): {S(try_repr(ex)).noesc()}>; {S(try_repr(obj)).noesc()}")
 					if (r == w): continue
 
-					if ((rf := r.fit(mlw-len(w)-1)) != r): r = terminal_link(r, rf)
-					v = f"\033[{color}m{r}\033[0m"
+					if ((rf := r.fit(mlw-len(w)-1)) != r): r = S(terminal_link(r, rf))
+					v = f"\033[{color}m{r.indent(12, first=False)}\033[m"
 					break
 				else:
 					if (w.replace('.', '').isidentifier() and w not in builtins.__dict__):
-						v = '\033[90m<not found>\033[0m'
+						v = '\033[90m<not found>\033[m'
 						try: del obj
 						except NameError: pass
 
 				if (v is not None):
-					try: name = terminal_link(obj.__name__ + format_inspect_signature(inspect.signature(obj)), w)
+					try: name = terminal_link(obj.__name__ + format_inspect_signature(_inspect_signature(obj, eval_str=True)), w)
 					except Exception:
 						try: name = terminal_link(str(type(obj)), w)
 						except Exception: name = w
-					print(f"{' '*12}\033[{'2;'*(w not in words_line)}{'2;92' if (ns is frame.f_locals and w in frame.f_code.co_varnames[:frame.f_code.co_argcount]) else '94'}m{name}\033[0;2m:\033[0m \033[2m{v}", file=file)
+					print(f"{' '*12}\033[{'2;'*(w not in words_line)}{'2;92' if (ns is frame.f_locals and w in frame.f_code.co_varnames[:frame.f_code.co_argcount]) else '94'}m{name}\033[0;2m:\033[m \033[2m{v}", file=file)
 
 			if (_linesep is not None): print(end=_linesep, file=file)
 		elif (not lastlines and _linesep is not None): print(end=_linesep, file=file)
 		lastlines = lines
 
-	if (repeated): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m times)\033[0m\n", file=file); repeated = int() # TODO FIXME needed?
+	if (repeated): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m times)\033[m\n", file=file); repeated = int() # TODO FIXME needed?
 
-	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[0;2m{exctype.__name__}\033[0m", file=file)
+	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[0;2m{exctype.__name__}\033[m", file=file)
 	elif (exctype is SyntaxError and exc.args):
 		try: line = highlight(exc.text)
 		except Exception: line = exc.text
-		print(f"\033[0;1;96m{exctype.__name__}\033[0m: {exc}", file=file)
-		if (line is not None): print(f"{line.rstrip().expandtabs(1)}\n{' '*(exc.offset-1)}\033[95m{'^'*max(1, exc.end_offset - exc.offset)}\033[0m", file=file)
-	elif (exc is not None): print(f"\033[0;1;91m{exctype.__name__}\033[0m{': '*bool(str(exc))}{exc}", file=file)
+		print(f"\033[0;1;96m{exctype.__name__}\033[m: {exc}", file=file)
+		if (line is not None): print(f"{line.rstrip().expandtabs(1)}\n{' '*(exc.offset-1)}\033[95m{'^'*max(1, exc.end_offset - exc.offset)}\033[m", file=file)
+	elif (exc is not None):
+		try: s = str(exc)
+		except Exception: s = "\033[2;3m (\033[91m<exception str() failed>\033[39m)\033[m"
+		else:
+			if (s): s = f": {s}"
+		print(f"\033[0;1;91m{exctype.__name__}\033[m{s}", file=file)
 
 	if (exc is not None and exc.__cause__ is not None):
-		print(" \033[0;1m> This exception was caused by:\033[0m\n", file=file)
+		print("\n \033[0;1m> This exception was caused by:\033[m\n", file=file)
 		Sexcepthook(exc.__cause__, file=file, linesep=_linesep)
 
 	if (__repl__ and tb is not None and tb.tb_frame.f_code.co_filename == '<stdin>'):
 		if (exctype is NameError and exc.args and
 		    (m := re.fullmatch(r"name '(\w+)' is not defined", exc.args[0])) is not None and
 		    (module := importlib.util.find_spec(m[1])) is not None):
-			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[0m", file=file)
+			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[m", file=file)
 			frame.f_globals[m[1]] = module.loader.load_module()
 			#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
 		elif (exctype is AttributeError and exc.args and
 		      (m := re.fullmatch(r"module '(\w+)(.+)?' has no attribute '(\w+)'", exc.args[0])) is not None and
 		      (module := importlib.util.find_spec(m[1]+(m[2] or '')+'.'+m[3])) is not None):
-			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[0m", file=file)
+			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[m", file=file)
 			setattr((operator.attrgetter(m[2].removeprefix('.'))(frame.f_globals[m[1]]) if (m[2]) else frame.f_globals[m[1]]), m[3], module.loader.load_module())
 			#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
 
-	print(end='\033[0m', file=file, flush=True)
+	print(end='\033[m', file=file, flush=True)
 
 def _Sexcepthook_install():
 	if (sys.excepthook is not Sexcepthook):
@@ -2735,7 +2758,7 @@ class grep(Slots):
 		for l in Sstr(x).noesc().split(self.sep):
 			m = re.search(self.expr, l, self.flags)
 			if (m is None): continue
-			print(re.sub(self.expr.join('()'), '\033[1;91m\\1\033[0m', l))
+			print(re.sub(self.expr.join('()'), '\033[1;91m\\1\033[m', l))
 
 #def printf(format, *args, file=sys.stdout, flush=False): print(format % args, end='', file=file, flush=flush)  # breaks convenience of 'pri-' tab-completion.
 class _CStream: # because I can.
@@ -2791,7 +2814,7 @@ def setonsignals(f=exit):
 logstart('Utils')
 if (__name__ == '__main__'):
 	testprogress()
-	log("\033[0mWhy\033[0;2m are u trying to run me?! It \033[0;93mtickles\033[0;2m!..\033[0m", raw=True)
+	log("\033[mWhy\033[0;2m are u trying to run me?! It \033[0;93mtickles\033[0;2m!..\033[m", raw=True)
 else: logimported()
 
 # by Sdore, 2021-24
