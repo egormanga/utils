@@ -684,6 +684,8 @@ class dispatch:
 
 	@classmethod
 	def __typecheck(cls, o, t) -> bool:
+		if (getattr(cls, '_dispatch__typecheck_frame', None) is not None): cls.__typecheck_frame = inspect.stack()[0].frame
+
 		if (t is None or t is inspect._empty): return True
 		if (o is cls.__FillValue or t is cls.__FillValue): return False
 
@@ -691,7 +693,6 @@ class dispatch:
 		if (isinstance(t, (function, builtin_function_or_method, method_descriptor))): return bool(t(o))
 
 		origin, args = typing.get_origin(t), typing.get_args(t)
-		# TODO: (list[int], list)
 
 		if (isinstance(t, typing.TypeVar)):
 			if (not isinstance(o, typing_inspect.get_constraints(t))): return False
@@ -704,14 +705,14 @@ class dispatch:
 			if (not isinstance(o, (origin or t))): return False
 
 		if (args):
-			if (origin is not None and issubclass(origin, type)):
+			if (issubclass(origin, type)):
 				tt = only(args)
 				tto = (typing.get_origin(tt) or tt)
 				oo = (typing.get_origin(o) or o)
-				if (not (oo is tto or isinstance(oo, type) and issubclass(oo, tto))): return False
+				if (not (oo is tto or isinstance(oo, type) and issubclass(oo, (typing.get_args(tt) if (typing_inspect.is_union_type(tt)) else tto)))): return False
 				if (typing_inspect.is_generic_type(tt)):
-					if (not all(j for i in args for j in itertools.starmap(lambda a, b: a and b and issubclass(a, b), itertools.zip_longest(*map(typing.get_args, (o, i)))))): return False
-			elif (origin is not None and issubclass(origin, typing.Tuple) and isinstance(o, typing.Tuple)):
+					if (not all(itertools.starmap(lambda a, b: a and b and any(issubclass(i, b) for i in (typing.get_args(a) if (typing_inspect.is_union_type(a)) else a)), itertools.zip_longest(*map(typing.get_args, (o, tt)))))): return False
+			elif (issubclass(origin, typing.Tuple) and isinstance(o, typing.Tuple)):
 				args = list(args)
 				try: ei = args.index(...)
 				except ValueError: pass
@@ -719,6 +720,7 @@ class dispatch:
 				if (not all(itertools.starmap(cls.__typecheck, itertools.zip_longest(o, args, fillvalue=cls.__FillValue)))): return False
 			elif (isinstance(o, typing.Iterable) and not isinstance(o, typing.Iterator)):
 				if (not all(cls.__typecheck(i, args[0]) for i in o)): return False
+			else: return False # TODO FIXME?
 
 		return True
 
@@ -2146,6 +2148,14 @@ class SlotsOnly(metaclass=SlotsOnlyMeta): pass
 class ABCSlotsOnlyMeta(SlotsOnlyMeta, abc.ABCMeta): pass
 class ABCSlotsOnly(metaclass=ABCSlotsOnlyMeta): pass
 
+def typecheck(x, t): return dispatch._dispatch__typecheck(x, t)
+#@dispatch
+#def typecheck(x, t: lambda t: typing_inspect.get_origin(t) is type and typing_inspect.is_generic_type(t)): return issubclass(x, typing_inspect.get_args(t))
+#@dispatch
+#def typecheck(x, t: type): return isinstance(x, t)
+#@dispatch
+#def typecheck(x, t: typing_inspect.is_generic_type):
+
 class SlotsTypecheckMeta(type):
 	def __new__(metacls, name, bases, classdict):
 		annotations = get_annotations(classdict)
@@ -2155,8 +2165,8 @@ class SlotsTypecheckMeta(type):
 			try: ra = get_annotations(v)['return']
 			except KeyError: continue
 			if (k in annotations):
-				if ((a := annotations[k]) is not ... and ra != a and not dispatch._dispatch__typecheck(ra, a)):
-					raise TypeError(f"Specified property type annotation ('{k} -> {format_inspect_annotation(ra)}') is not a subclass of its slot annotation ('{k}: {format_inspect_annotation(a)}')")
+				if ((a := annotations[k]) is not ... and ra != a and not typecheck(ra, type[a])):
+					raise TypeError(f"Specified property type annotation ({k} -> {format_inspect_annotation(ra)}) is not a subclass of its slot annotation ({k}: {format_inspect_annotation(a)})")
 			else: annotations[k] = ra
 
 		for k, (v, c) in functools.reduce(operator.or_, ({k: (v, c)
@@ -2166,8 +2176,8 @@ class SlotsTypecheckMeta(type):
 		                                                                                        and 'return' in get_annotations(v)
 		                                                                                    }).items()
 		                                                 } for c in S((*bases, *(j for i in bases for j in i.mro()))).uniquize()[::-1]), {}).items():
-			if (v is not ... and (a := annotations.get(k)) and a != v and not (isinstance(a, type) and dispatch._dispatch__typecheck(a, v))):
-				raise TypeError(f"Specified slot type annotation in class {name!r} ({k}: {format_inspect_annotation(a)}) is not a subclass of its parent's annotation in class {c.__name__!r} ({k}: {format_inspect_annotation(v)}).")
+			if (v is not ... and (a := annotations.get(k)) and a != v and not ((isinstance(a, type) or typing_inspect.is_generic_type(a)) and typecheck(a, type[v]))):
+				raise TypeError(f"Specified slot type annotation in class {name!r} ({k}: {format_inspect_annotation(a)}) is not a subclass of its parent's annotation in class {c.__name__!r} ({k}: {format_inspect_annotation(v)})")
 
 		return super().__new__(metacls, name, bases, classdict)
 class SlotsTypecheck(metaclass=SlotsTypecheckMeta): pass
@@ -2216,7 +2226,7 @@ class SlotsInitMeta(SlotsOnlyMeta):
 					if (typing_inspect.is_optional_type(v) or (hasattr(types, 'UnionType') and isinstance(v, types.UnionType) and NoneType in typing.get_args(v))): a = (typing.get_origin(v := typing.get_args(v)[-1]) or v)()
 					else: raise TypeError(f"{try_repr(self)} missing a required keyword-only argument: {k}")
 				else:
-					if (isinstance(v, type) and not dispatch._dispatch__typecheck(a, v)): raise TypeError(f"{try_repr(a)} is not of type {try_repr(v)}")
+					if (isinstance(v, type) and not typecheck(a, type[v])): raise TypeError(f"{try_repr(a)} is not of type {try_repr(v)}")
 				object.__setattr__(self, k, a)
 
 		if ('__init__' not in classdict): cls.__init__ = __init__
@@ -2705,6 +2715,9 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 		else:
 			if (s): s = f": {s}"
 		print(f"\033[0;1;91m{exctype.__name__}\033[m{s}", file=file)
+
+	for i in getattr(exc, '__notes__', ()):
+		print(f"  \033[2m{i}\033[m", file=file)
 
 	if (exc is not None and exc.__cause__ is not None):
 		print("\n \033[0;1m> This exception was caused by:\033[m\n", file=file)
