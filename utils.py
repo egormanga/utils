@@ -2226,7 +2226,7 @@ class SlotsInitMeta(SlotsOnlyMeta):
 					if (typing_inspect.is_optional_type(v) or (hasattr(types, 'UnionType') and isinstance(v, types.UnionType) and NoneType in typing.get_args(v))): a = (typing.get_origin(v := typing.get_args(v)[-1]) or v)()
 					else: raise TypeError(f"{try_repr(self)} missing a required keyword-only argument: {k}")
 				else:
-					if (isinstance(v, type) and not typecheck(a, type[v])): raise TypeError(f"{try_repr(a)} is not of type {try_repr(v)}")
+					if (isinstance(v, type) and not isinstance(a, v)): raise TypeError(f"{try_repr(a)} is not of type {try_repr(v)}")
 				object.__setattr__(self, k, a)
 
 		if ('__init__' not in classdict): cls.__init__ = __init__
