@@ -26,6 +26,8 @@ class ModuleProxy(types.ModuleType):
 
 	def __getattribute__(self, x):
 		module = __import__(name := object.__getattribute__(self, '__name__'))
+		try: self.__doc__ = module.__doc__
+		except AttributeError: pass
 		try: inspect.stack(0)[1].frame.f_globals[name] = module
 		except (TypeError, IndexError): pass
 		if (module.__name__ not in {*getattr(sys, 'stdlib_module_names', ()), *sys.builtin_module_names} or
@@ -745,10 +747,6 @@ class dispatch:
 		else: return (doc + '\n\n' + signatures)
 
 	@property
-	def __signature__(self):
-		return ...
-
-	@property
 	def signatures(self):
 		return tuple(self.__overloaded_functions_docstrings[self.__origmodule__, self.__qualname__].keys())
 
@@ -799,27 +797,26 @@ def _inspect_get_annotations(x, *, globals=None, locals=None, eval_str=False):
 	return res
 
 @dispatch
-def get_annotations(classdict: lambda x: isinstance(x, dict) and x.get('__module__') in sys.modules, *, eval_str=True, globals=None, locals=None): return get_annotations(classdict.get('__annotations__', {}), eval_str=eval_str, globals=globals if (globals is not None or not eval_str) else getattr(sys.modules.get(classdict['__module__']), '__dict__', None), locals=locals if (locals is not None or not eval_str) else classdict)
+def get_annotations(classdict: lambda x: isinstance(x, dict) and x.get('__module__') in sys.modules, *, eval_str=True, uncomment=False, globals=None, locals=None): return get_annotations(classdict.get('__annotations__', {}), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(sys.modules.get(classdict['__module__']), '__dict__', None)), locals=(locals if (locals is not None or not eval_str) else classdict))
 @dispatch
-def get_annotations(annotations: dict, *, eval_str=False, globals=None, locals=None): return {k: e if (eval_str and isinstance(v, str) and not v.strip().startswith('#') and (e := try_eval(v.split('--')[0], globals, locals))) else v for k, v in annotations.items()}
+def get_annotations(annotations: dict, *, eval_str=False, uncomment=False, globals=None, locals=None): return {k: (e if (eval_str and isinstance(v, str) and (uncomment or not v.lstrip().startswith('#')) and (e := try_eval(v.lstrip().removeprefix('#').split('--')[0], globals, locals))) else v) for k, v in annotations.items()}
 @dispatch
 def get_annotations(x: lambda x: hasattr(x, '__wrapped__'), **kwargs): return get_annotations(x.__wrapped__, **kwargs)
 @dispatch
-def get_annotations(cls: type, *, eval_str=True, globals=None, locals=None): return get_annotations(_inspect_get_annotations(cls), eval_str=eval_str, globals=globals if (globals is not None or not eval_str) else getattr(sys.modules.get(cls.__module__, {}), '__dict__', None), locals=locals if (locals is not None or not eval_str) else dict(vars(cls)))
+def get_annotations(cls: type, *, properties=False, eval_str=True, uncomment=False, globals=None, locals=None): return (get_annotations(_inspect_get_annotations(cls), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(sys.modules.get(cls.__module__, {}), '__dict__', None)), locals=(locals if (locals is not None or not eval_str) else dict(vars(cls)))) | ({k: r for k, v in vars(cls).items() if isinstance(v, (property, functools.cached_property)) and (r := get_annotations(v, eval_str=eval_str, uncomment=uncomment, globals=globals, locals=locals).get('return'))} if (properties) else {}))
 @dispatch
-def get_annotations(m: module, *, eval_str=True, globals=None, locals=None): return get_annotations(_inspect_get_annotations(m), eval_str=eval_str, globals=globals if (globals is not None or not eval_str) else getattr(f, '__dict__', None), locals=locals)
+def get_annotations(m: module, *, eval_str=True, uncomment=False, globals=None, locals=None): return get_annotations(_inspect_get_annotations(m), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(f, '__dict__', None)), locals=locals)
 @dispatch
 def get_annotations(p: (functools.partial, functools.cached_property), **kwargs): return get_annotations(p.func, **kwargs)
 @dispatch
-def get_annotations(f: callable, *, eval_str=True, globals=None, locals=None): return get_annotations(_inspect_get_annotations(f), eval_str=eval_str, globals=globals if (globals is not None or not eval_str) else getattr(f, '__globals__', None), locals=locals)
+def get_annotations(f: callable, *, eval_str=True, uncomment=False, globals=None, locals=None): return get_annotations(_inspect_get_annotations(f), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(f, '__globals__', None)), locals=locals)
 @dispatch
-def get_annotations(p: property, **kwargs): return get_annotations(p.fget, **kwargs)
+def get_annotations(p: property, **kwargs): return get_annotations(p.fget or {}, **kwargs)
 
 def cast(*types): return lambda x: (t(i) if (not isinstance(i, t)) else i for t, i in zip(types, x))
 
 @suppress_tb
 def cast_call(f, *args, **kwargs):
-	(f.__func__ if (isinstance(f, method)) else f).__annotations__ = get_annotations(f)
 	fsig = _inspect_signature(f, eval_str=True)
 	try:
 		args = [(v.annotation)(args[ii]) if (v.annotation is not inspect._empty and not isinstance(args[ii], v.annotation)) else args[ii] for ii, (k, v) in enumerate(fsig.parameters.items()) if ii < len(args)]
@@ -1129,7 +1126,7 @@ def setutilsnologimport(): log._logged_utils_start = True
 
 _logged_exceptions = set()
 @dispatch
-def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=False, nohandlers=False, _dlog=False, _caught=False, **kwargs):
+def exception(ex: BaseException = None, extra=None, *, once=False, raw=False, nolog=False, nohandlers=False, _dlog=False, _caught=False, **kwargs):
 	""" Log an exception.
 	Parameters:
 		ex: exception to log.
@@ -1137,6 +1134,7 @@ def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=Fal
 		nolog: do not write to stderr.
 		nohandlers: do not call exc_handlers.
 	"""
+	if (ex is None): ex = sys.exc_info()[1]
 	ex = unraise(ex)
 	if (isinstance(ex, NonLoggingException)): return
 	if (once):
@@ -1149,7 +1147,7 @@ def exception(ex: BaseException, extra=None, *, once=False, raw=False, nolog=Fal
 			except Exception: pass
 log._exc_handlers = set()
 def register_exc_handler(f): log._exc_handlers.add(f)
-def logexception(*args, **kwargs): return exception(*args, **kwargs, _caught=True)
+def logexception(*args, **kwargs): return exception(*args, **kwargs, nohandlers=True, _caught=True)
 def dlogexception(*args, **kwargs): return logexception(*args, **kwargs, _dlog=True)
 
 def dcall(f): logexception(DeprecationWarning(" *** dcall() → tracecall() *** ")); return tracecall(f)
@@ -2158,24 +2156,21 @@ def typecheck(x, t): return dispatch._dispatch__typecheck(x, t)
 
 class SlotsTypecheckMeta(type):
 	def __new__(metacls, name, bases, classdict):
-		annotations = get_annotations(classdict)
+		annotations = get_annotations(classdict, uncomment=True)
 
 		for k, v in classdict.items():
 			if (not isinstance(v, (property, functools.cached_property))): continue
-			try: ra = get_annotations(v)['return']
+
+			try: ra = get_annotations(v, uncomment=True)['return']
 			except KeyError: continue
+
 			if (k in annotations):
 				if ((a := annotations[k]) is not ... and ra != a and not typecheck(ra, type[a])):
 					raise TypeError(f"Specified property type annotation ({k} -> {format_inspect_annotation(ra)}) is not a subclass of its slot annotation ({k}: {format_inspect_annotation(a)})")
 			else: annotations[k] = ra
 
-		for k, (v, c) in functools.reduce(operator.or_, ({k: (v, c)
-		                                                  for k, v in (get_annotations(c) | {k: get_annotations(v)['return']
-		                                                                                     for k, v in vars(c).items()
-		                                                                                     if isinstance(v, (property, functools.cached_property))
-		                                                                                        and 'return' in get_annotations(v)
-		                                                                                    }).items()
-		                                                 } for c in S((*bases, *(j for i in bases for j in i.mro()))).uniquize()[::-1]), {}).items():
+		for k, (v, c) in functools.reduce(operator.or_, ({k: (v, c) for k, v in get_annotations(c, properties=True, uncomment=True).items()}
+		                                                 for c in S((*bases, *(j for i in bases for j in i.mro()))).uniquize()[::-1]), {}).items():
 			if (v is not ... and (a := annotations.get(k)) and a != v and not ((isinstance(a, type) or typing_inspect.is_generic_type(a)) and typecheck(a, type[v]))):
 				raise TypeError(f"Specified slot type annotation in class {name!r} ({k}: {format_inspect_annotation(a)}) is not a subclass of its parent's annotation in class {c.__name__!r} ({k}: {format_inspect_annotation(v)})")
 
@@ -2196,9 +2191,11 @@ class TypeInitMeta(SlotsTypecheckMeta):
 			for k, v in get_annotations(cls).items():
 				if (v is ... or isinstance(v, str)): continue
 				if (isinstance(getattr(cls, k, None), (property, functools.cached_property))): continue
+
 				try: object.__getattribute__(self, k)
 				except AttributeError: object.__setattr__(self, k, (v() if (isinstance(v, (type, function, method, builtin_function_or_method, types.GenericAlias))) else v))
-			__init_o__(self, *args, **kwargs)
+
+			return __init_o__(self, *args, **kwargs)
 
 		cls.__init__ = __init__
 		#cls.__metaclass__ = metacls  # inheritance?
@@ -2227,6 +2224,7 @@ class SlotsInitMeta(SlotsOnlyMeta):
 					else: raise TypeError(f"{try_repr(self)} missing a required keyword-only argument: {k}")
 				else:
 					if (isinstance(v, type) and not isinstance(a, v)): raise TypeError(f"{try_repr(a)} is not of type {try_repr(v)}")
+
 				object.__setattr__(self, k, a)
 
 		if ('__init__' not in classdict): cls.__init__ = __init__
@@ -2723,7 +2721,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 		print("\n \033[0;1m> This exception was caused by:\033[m\n", file=file)
 		Sexcepthook(exc.__cause__, file=file, linesep=_linesep)
 
-	if (__repl__ and tb is not None and tb.tb_frame.f_code.co_filename == '<stdin>'):
+	if (__repl__ and tb is not None and (tb.tb_frame.f_code.co_filename == '<stdin>' or tb.tb_frame.f_code.co_filename.startswith('<python-input-'))):
 		if (exctype is NameError and exc.args and
 		    (m := re.fullmatch(r"name '(\w+)' is not defined", exc.args[0])) is not None and
 		    (module := importlib.util.find_spec(m[1])) is not None):
