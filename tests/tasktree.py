@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # Utils lib TaskTree test
 
 import time
@@ -6,7 +6,7 @@ from utils.nolog import log, TaskTree, NodesTree
 
 def check(v, s):
 	print(v)
-	assert v == s
+	assert (v == s)
 
 check(NodesTree({
 	1: {},
@@ -91,5 +91,5 @@ del tt
 
 log('TaskTree test ok\n')
 
-# by Sdore, 2019-2022
-#  www.sdore.me
+# by Sdore, 2019-25
+#   www.sdore.me

@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # Utils lib tests
 
 from utils import *; logstart('Utils tests')
@@ -9,4 +9,5 @@ def main():
 
 if (__name__ == '__main__'): logstarted(); exit(main())
 
-# by Sdore, 2019
+# by Sdore, 2019-25
+#   www.sdore.me

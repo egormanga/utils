@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # Utils lib dispatch() test
 
 import typing
@@ -133,5 +133,5 @@ checkex(e)
 
 log('dispatch() test ok\n')
 
-# by Sdore, 2019-2022
-#  www.sdore.me
+# by Sdore, 2019-25
+#   www.sdore.me

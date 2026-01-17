@@ -1,3 +1,3 @@
 #!/bin/bash
 
-exec python3 $([[ "$@" ]] || echo '-i') -c "import utils; from utils import *; logdumb(); $*"
+exec python3 $([[ "$@" ]] || echo '-i') -c "import utils; from utils import *; logdumb()"$'\n'"$1" "${@:2}"

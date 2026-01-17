@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # Utils lib ProgressPool test
 
 import time
@@ -7,14 +7,14 @@ from utils.nolog import log, ProgressPool, ThreadedProgressPool
 with ProgressPool() as pp:
 	for i in pp.range(2+1):
 		for j in pp.range(3+1):
-			for k in pp.range(2000+1):
+			for k in pp.range(2000+1, add_base=True):
 				pass
 #time.sleep(1)
 
 with ThreadedProgressPool() as pp:
 	for i in pp.range(50, 100+1):
 		for j in pp.range(i+1):
-			time.sleep(0.001)
+			time.sleep(1e-3)
 #time.sleep(0.5)
 
 with ProgressPool() as pp:
@@ -23,5 +23,5 @@ with ProgressPool() as pp:
 
 log("Progress test ok\n")
 
-# by Sdore, 2019-22
+# by Sdore, 2019-25
 #   www.sdore.me

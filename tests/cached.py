@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # Utils lib cached*() test
 
 import time
@@ -6,7 +6,7 @@ from utils.nolog import log, preeval, cachedfunction, cachedproperty
 
 def check(v, s):
 	print(repr(v))
-	assert v == s
+	assert (v == s)
 
 class Test:
 	@property
@@ -84,4 +84,5 @@ assert time.time()-start < 0.001
 
 log('cached*() test ok\n')
 
-# by Sdore, 2019
+# by Sdore, 2019-25
+#   www.sdore.me
