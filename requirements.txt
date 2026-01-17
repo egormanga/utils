@@ -1,3 +1,4 @@
 regex
 pygments
 typing_inspect
+typing_validation

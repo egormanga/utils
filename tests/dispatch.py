@@ -22,7 +22,7 @@ def f(x: str) -> int: return int(x)
 def f(x: str, y: int) -> str: return x+str(y)
 
 @dispatch
-def f(x, b: type(Ellipsis)) -> (int, str): return f".{x}."
+def f(x, b: type(Ellipsis)) -> int | str: return f".{x}."
 
 @dispatch
 def f(x, y: str, z=123) -> str: return str(x)+repr(y)+str(z)
@@ -55,7 +55,7 @@ check(f('sqs', 'boo', z=0), "sqs'boo'0")
 check(f(...), 'lol')
 
 @dispatch
-def g(a: (int, str)): return str(a)+type(a).__name__
+def g(a: int | str): return str(a)+type(a).__name__
 
 check(g(1), '1int')
 check(g('b'), 'bstr')

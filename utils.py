@@ -15,7 +15,7 @@ else: logimported()
 
 """
 
-import sys, queue, regex, types, inspect, argparse, pygments, readline, warnings, typing_inspect
+import sys, queue, regex, types, inspect, argparse, pygments, readline, warnings, typing_inspect, typing_validation
 
 py_version = f"Python {sys.version.split(maxsplit=1)[0]}"
 __repl__ = bool(getattr(sys, 'ps1', sys.flags.interactive))
@@ -197,7 +197,7 @@ def S(*x, ni_ok=False):
 	""" Convert `x' to an instance of corresponding S-type. """
 
 	r = tuple(i if (isinstance(i, S_type)) else Stuple(i) if (isinstance(i, generator)) else globals().get('S'+i.__class__.__name__, lambda i: raise_(NotImplementedError('S'+i.__class__.__name__)) if (not ni_ok) else i)(i) for i in x)
-	return (first(r) if (len(r) == 1) else r)
+	return (next(iter(r)) if (len(r) == 1) else r)
 
 class S_type: pass
 
@@ -578,6 +578,8 @@ def funcdecorator(df=None, /, *, signature=None, suppresstb=True): # TODO: __dic
 
 	return ndf
 
+def typecheck(x, t): return typing_validation.is_valid(x, t)
+
 class DispatchError(TypeError): pass
 
 class dispatch:
@@ -686,13 +688,14 @@ class dispatch:
 
 	@classmethod
 	def __typecheck(cls, o, t) -> bool:
-		if (getattr(cls, '_dispatch__typecheck_frame', None) is not None): cls.__typecheck_frame = inspect.stack()[0].frame
-
 		if (t is None or t is inspect._empty): return True
 		if (o is cls.__FillValue or t is cls.__FillValue): return False
 
 		if (isinstance(t, function) and t.__code__.co_argcount == 0): return cls.__typecheck(o, t())
 		if (isinstance(t, (function, builtin_function_or_method, method_descriptor))): return bool(t(o))
+
+		return typecheck(o, t) # XXX
+		######
 
 		origin, args = typing.get_origin(t), typing.get_args(t)
 
@@ -807,7 +810,7 @@ def get_annotations(cls: type, *, properties=False, eval_str=True, uncomment=Fal
 @dispatch
 def get_annotations(m: module, *, eval_str=True, uncomment=False, globals=None, locals=None): return get_annotations(_inspect_get_annotations(m), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(f, '__dict__', None)), locals=locals)
 @dispatch
-def get_annotations(p: (functools.partial, functools.cached_property), **kwargs): return get_annotations(p.func, **kwargs)
+def get_annotations(p: functools.partial | functools.cached_property, **kwargs): return get_annotations(p.func, **kwargs)
 @dispatch
 def get_annotations(f: callable, *, eval_str=True, uncomment=False, globals=None, locals=None): return get_annotations(_inspect_get_annotations(f), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(f, '__globals__', None)), locals=locals)
 @dispatch
@@ -1002,14 +1005,18 @@ def init(*names, **kwnames):
 	def decorator(f):
 		def decorated(self, *args, **kwargs):
 			missing = list()
+
 			for i in names:
 				try: setattr(self, i, kwargs.pop(i))
 				except KeyError: missing.append(i)
+
 			for k, v in kwnames.items():
 				try: setattr(self, k, kwargs.pop(k))
 				except KeyError:
-					if (v is not ...): setattr(self, k, v() if (isinstance(v, (type, function, method))) else v)
+					if (v is not ...): setattr(self, k, (v() if (isinstance(v, (type, function, method))) else v))
+
 			if (missing): raise TypeError(f"""{f.__name__}() missing {decline(len(missing), 'argument', 'arguments', sep=' required keyword-only ')}: {S(', ').join((i.join("''") for i in missing), last=(' and ', ', and '))}""")
+
 			return f(self, *args, **kwargs)
 		return decorated
 	return decorator
@@ -1347,7 +1354,11 @@ class Progress:
 		l = (self.l(add_base) if (self._pool is None) else max(i.l(add_base) for i in self._pool.p))
 
 		fstr = (self.prefix + ('%s/%s (%d%%%s) ' if (not self.fixed) else f"%{l}s/%-{l}s (%-3d%%%s) "))
-		r = (fstr % (*((cv, self.mv) if (not add_base) else ((self.format_base(i, base=add_base)) for i in (cv, self.mv))), (cv*100//self.mv if (self.mv) else 0), ', '+self.format_speed_eta(cv, self.mv, (time.time() - self.started), fixed=self.fixed, add_base=add_base) if (add_speed_eta) else ''))
+		r = (fstr % (
+			*((cv, self.mv) if (not add_base) else ((self.format_base(i, base=add_base)) for i in (cv, self.mv))),
+			(cv*100//self.mv if (self.mv) else 0),
+			((', ' + self.format_speed_eta(cv, self.mv, (time.time() - self.started), fixed=self.fixed, add_base=add_base)) if (add_speed_eta) else ''),
+		))
 
 		w = len(r)
 		if (self._pool is not None):
@@ -1363,6 +1374,7 @@ class Progress:
 		d = 100/(width-2)
 		fp, pp = (divmod(cv*100/d, mv) if (mv) else (0, 0))
 		pb = (chars[-1]*int(fp) + (chars[int(pp*len(chars)//mv)]*(cv != mv) if (mv) else ''))
+
 		return f"{border[0]}{pb.ljust(width-2, fill)}{border[1]}"
 
 	@classmethod
@@ -1370,11 +1382,14 @@ class Progress:
 		speed = cv/elapsed
 		eta = (math.ceil(mv/speed)-elapsed if (speed) else 0)
 		if (fixed): return ((first(f"%2d{'dhms'[ii]}" % i for ii, i in enumerate((eta//60//60//24, eta//60//60%24, eta//60%60, eta%60)) if i) if (eta > 0) else ' ? ') + ' ETA')
+
 		eta = (' '.join(f"{int(i)}{'dhms'[ii]}" for ii, i in enumerate((eta//60//60//24, eta//60//60%24, eta//60%60, eta%60)) if i) if (eta > 0) else '?')
 		speed_u = 0
 		for i in (60, 60, 24):
 			if (speed < 1): speed *= i; speed_u += 1
-		if (add_base is not None): speed = cls.format_base(speed, base=add_base)
+		if (add_base): speed = cls.format_base(speed, base=add_base)
+		else: speed = round(speed, 2)
+
 		return f"{speed}/{'smhd'[speed_u]}, {eta} ETA"
 
 	@staticmethod
@@ -1390,17 +1405,19 @@ class Progress:
 		l = len(names)
 		if (_calc_len): sl, nl = len(S(step))-1, max(map(len, names))
 
-		try: return first((f"{{: {sl+nl}}}".format(v) if (_calc_len) else str(v))+(b if (b != ' ') else '') for b, v in ((i, cv//(step**(l-ii))) for ii, i in enumerate(reversed(names), 1)) if v) # TODO: fractions; negative
+		try: return first(((f"{{: {sl+nl}}}".format(v) if (_calc_len) else str(v)) + (b if (b != ' ') else ''))
+		                  for b, v in ((i, cv//(step**(l-ii))) for ii, i in enumerate(reversed(names), 1))
+		                  if v) # TODO: fractions; negative
 		except StopIteration: return '0'
 
-	def print(self, cv, *, out=sys.stderr, width=None, flush=True):
+	def print(self, cv, *, out=sys.stderr, width=None, flush=True, **kwargs):
 		if (width is None and out is sys.stderr):
 			try: width = os.get_terminal_size(out.fileno())[0]
 			except OSError: pass
 
 		if (width is None): return
 
-		print('\033[K' + self.format(cv, width=width), end='\r', file=out, flush=flush)
+		print('\033[K' + self.format(cv, width=width, **kwargs), end='\r', file=out, flush=flush)
 
 		self.printed = (out is sys.stderr)
 
@@ -1418,17 +1435,24 @@ class ProgressPool:
 	@dispatch
 	def __init__(self, n: int = 0, **kwargs):
 		#self.__init__(*(Progress(-1, **kwargs, _pool=self) for _ in range(n)), **kwargs)
-		self.kwargs = kwargs
-		self.p = [Progress(-1, **parseargs(kwargs, fixed=True), _pool=self) for _ in range(n)]
+		self.kwargs = parseargs(kwargs, fixed=True)
+		self.p = [Progress(-1, **self.kwargs, _pool=self) for _ in range(n)]
 		self.mw = int()
 		self.ranges = list()
 		self.printed = bool()
 
 	def __enter__(self):
 		self.started = time.time()
+
+		for p in self.p:
+			p.__enter__()
+
 		return self
 
 	def __exit__(self, exc_type, exc, tb):
+		for p in reversed(self.p):
+			p.__exit__(exc_type, exc, tb)
+
 		if (self.printed and sys.stderr.isatty()): print(end='\033[J', file=sys.stderr, flush=True)
 
 	def print(self, *cvs, width=None):
@@ -1449,7 +1473,9 @@ class ProgressPool:
 		self.ranges.append(int())
 
 		cv = (stop - start)
-		if (n == len(self.p)): self.p.append(Progress(cv, **parseargs(kwargs, **self.kwargs), _pool=self))
+		if (n == len(self.p)):
+			self.p.append(p := Progress(cv, **parseargs(kwargs, **self.kwargs), _pool=self))
+			if (self.started is not None): p.__enter__()
 		else: self.p[n].mv = cv
 
 		for i in range(start, stop, step):
@@ -1506,8 +1532,9 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 
 		cv = (stop - start)
 		if (n == len(self.p)):
-			self.p.append(Progress(cv, **parseargs(kwargs, **self.kwargs), _pool=self))
+			self.p.append(p := Progress(cv, **parseargs(kwargs, **self.kwargs), _pool=self))
 			self.cvs.append(int())
+			if (self.started is not None): p.__enter__()
 		else: self.p[n].mv = cv
 
 		for i in range(start, stop, step):
@@ -1760,11 +1787,11 @@ class lc:
 		self.__init__(locale.LC_ALL)
 
 	@dispatch
-	def __init__(self, lc: (str, typing.Iterable, NoneType)):
+	def __init__(self, lc: str | typing.Iterable | NoneType):
 		self.__init__(locale.LC_ALL, lc)
 
 	@dispatch
-	def __init__(self, category: int = locale.LC_ALL, lc: (str, typing.Iterable, NoneType) = None):
+	def __init__(self, category: int = locale.LC_ALL, lc: str | typing.Iterable | NoneType = None):
 		self.category, self.lc = category, (lc if (lc is not None) else '.'.join(locale.getlocale()))
 
 	def __enter__(self):
@@ -2145,14 +2172,6 @@ class SlotsOnlyMeta(type):
 class SlotsOnly(metaclass=SlotsOnlyMeta): pass
 class ABCSlotsOnlyMeta(SlotsOnlyMeta, abc.ABCMeta): pass
 class ABCSlotsOnly(metaclass=ABCSlotsOnlyMeta): pass
-
-def typecheck(x, t): return dispatch._dispatch__typecheck(x, t)
-#@dispatch
-#def typecheck(x, t: lambda t: typing_inspect.get_origin(t) is type and typing_inspect.is_generic_type(t)): return issubclass(x, typing_inspect.get_args(t))
-#@dispatch
-#def typecheck(x, t: type): return isinstance(x, t)
-#@dispatch
-#def typecheck(x, t: typing_inspect.is_generic_type):
 
 class SlotsTypecheckMeta(type):
 	def __new__(metacls, name, bases, classdict):
@@ -2540,7 +2559,8 @@ def lstripcount(s, chars=None):
 	ns = s.lstrip(chars)
 	return (len(s)-len(ns), ns)
 
-def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # TODO: bpo-43914
+@suppress_tb
+def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n', _import=False): # TODO: bpo-43914
 	if (exctype is None): exctype, exc, tb = sys.exc_info()
 	else:
 		if (exc is None): exc, exctype = exctype, type(exctype)
@@ -2562,7 +2582,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 			else: return
 
 	if (exc is not None and exc.__context__ is not None and not exc.__suppress_context__):
-		Sexcepthook(exc.__context__, file=file, linesep=_linesep)
+		Sexcepthook(exc.__context__, file=file, linesep=_linesep, _import=_import)
 		print(" \033[0;1m> During handling of the above exception, another exception occurred:\033[m\n", file=file)
 
 	for frame, lineno in traceback.walk_tb(tb):
@@ -2719,21 +2739,27 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n'): # 
 
 	if (exc is not None and exc.__cause__ is not None):
 		print("\n \033[0;1m> This exception was caused by:\033[m\n", file=file)
-		Sexcepthook(exc.__cause__, file=file, linesep=_linesep)
+		Sexcepthook(exc.__cause__, file=file, linesep=_linesep, _import=_import)
 
-	if (__repl__ and tb is not None and (tb.tb_frame.f_code.co_filename == '<stdin>' or tb.tb_frame.f_code.co_filename.startswith('<python-input-'))):
+	if (__repl__ and not _import and tb is not None and (tb.tb_frame.f_code.co_filename == '<stdin>' or tb.tb_frame.f_code.co_filename.startswith('<python-input-'))):
 		if (exctype is NameError and exc.args and
 		    (m := re.fullmatch(r"name '(\w+)' is not defined", exc.args[0])) is not None and
 		    (module := importlib.util.find_spec(m[1])) is not None):
 			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[m", file=file)
-			frame.f_globals[m[1]] = module.loader.load_module()
-			#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
+			try: mod = module.loader.load_module()
+			except Exception: Sexcepthook(file=file, linesep=_linesep, _import=True)
+			else:
+				frame.f_globals[m[1]] = mod
+				#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
 		elif (exctype is AttributeError and exc.args and
 		      (m := re.fullmatch(r"module '(\w+)(.+)?' has no attribute '(\w+)'", exc.args[0])) is not None and
 		      (module := importlib.util.find_spec(m[1]+(m[2] or '')+'.'+m[3])) is not None):
 			print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[m", file=file)
-			setattr((operator.attrgetter(m[2].removeprefix('.'))(frame.f_globals[m[1]]) if (m[2]) else frame.f_globals[m[1]]), m[3], module.loader.load_module())
-			#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
+			try: mod = module.loader.load_module()
+			except Exception: Sexcepthook(file=file, linesep=_linesep, _import=True)
+			else:
+				setattr((operator.attrgetter(m[2].removeprefix('.'))(frame.f_globals[m[1]]) if (m[2]) else frame.f_globals[m[1]]), m[3], mod)
+				#readline.insert_text(readline.get_history_item(readline.get_current_history_length())) # TODO
 
 	print(end='\033[m', file=file, flush=True)
 
@@ -2828,5 +2854,5 @@ if (__name__ == '__main__'):
 	log("\033[mWhy\033[0;2m are u trying to run me?! It \033[0;93mtickles\033[0;2m!..\033[m", raw=True)
 else: logimported()
 
-# by Sdore, 2021-24
+# by Sdore, 2021-25
 #   www.sdore.me
