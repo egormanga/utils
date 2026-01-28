@@ -20,6 +20,11 @@ import sys, queue, regex, types, inspect, argparse, pygments, readline, warnings
 py_version = f"Python {sys.version.split(maxsplit=1)[0]}"
 __repl__ = bool(getattr(sys, 'ps1', sys.flags.interactive))
 
+def callstack(frame=None):
+	if (frame is None): frame = inspect.currentframe().f_back
+	while ((frame := frame.f_back) is not None):
+		yield frame
+
 class ModuleProxy(types.ModuleType):
 	def __init__(self, name):
 		self.__name__ = name
@@ -28,7 +33,7 @@ class ModuleProxy(types.ModuleType):
 		module = __import__(name := object.__getattribute__(self, '__name__'))
 		try: self.__doc__ = module.__doc__
 		except AttributeError: pass
-		try: inspect.stack(0)[1].frame.f_globals[name] = module
+		try: next(callstack()).f_globals[name] = module
 		except (TypeError, IndexError): pass
 		if (module.__name__ not in {*getattr(sys, 'stdlib_module_names', ()), *sys.builtin_module_names} or
 		    any('site-packages' in (getattr(module, i, None) or '') for i in ('__file__', '__path__'))):
@@ -101,12 +106,12 @@ _autoimports = (
 	#'nonexistenttest'
 )
 
-_globals_ = frozenset(sum((tuple(i.frame.f_globals) for i in inspect.stack(0)[1:]), start=()))
+_globals_ = frozenset(sum((tuple(i.f_globals) for i in callstack()), start=()))
 #print(_globals_)
 for i in _autoimports:
 	if (i in _globals_): continue
 	if (i in _globals):
-		#warnings.warn(f"redundant autoimport: {i}")
+		warnings.warn(f"redundant autoimport: {i}")
 		continue
 	_globals[i] = ModuleProxy(i)
 del i, _globals
@@ -153,7 +158,7 @@ tab = TAB = '\t'
 @contextlib.contextmanager
 def recursionlimit(limit):
 	old = sys.getrecursionlimit()
-	try: yield sys.setrecursionlimit(len(inspect.stack()) + limit)
+	try: yield sys.setrecursionlimit(len(inspect.stack(0)) + limit)
 	finally: sys.setrecursionlimit(old)
 
 def code_with(code, **kwargs):
@@ -202,7 +207,7 @@ def safeexec():
 		return exec(sys.stdin.readline())
 	finally: print(end='\033[m', file=sys.stderr, flush=True)
 def export(x):
-	globals = inspect.stack(0)[1].frame.f_globals
+	globals = next(callstack()).f_globals
 	all = globals.setdefault('__all__', [])
 	if (not isinstance(all, list)): all = globals['__all__'] = list(all)
 	try: name = x.__qualname__
@@ -220,7 +225,7 @@ def highlight(s: str, *, lexer=pygments.lexers.PythonLexer(), formatter=pygments
 
 _raise = object()
 @suppress_tb
-def first(l, default=_raise, fast=True):
+def first(l, /, default=_raise, fast=True):
 	l = iter(l)
 
 	if (fast):
@@ -233,7 +238,7 @@ def first(l, default=_raise, fast=True):
 		if (default is _raise): raise
 		return default
 @suppress_tb
-def last(l, default=_raise):
+def last(l, /, default=_raise):
 	l = iter(l)
 
 	try: r = next(l)
@@ -244,7 +249,7 @@ def last(l, default=_raise):
 	for r in l: pass
 	return r
 @suppress_tb
-def only(l, default=_raise):
+def only(l, /, default=_raise):
 	l = iter(l)
 	try: return next(l)
 	except StopIteration:
@@ -254,6 +259,8 @@ def only(l, default=_raise):
 		try: next(l)
 		except StopIteration: pass
 		else: raise StopIteration("Only a single value expected")
+
+def groupby(x, /, key=None): return itertools.groupby(sorted(x, key=key), key=key)
 
 def S(*x, ni_ok=False):
 	""" Convert `x' to an instance of corresponding S-type. """
@@ -731,7 +738,7 @@ class dispatch:
 
 		res = copy.copy(self)
 		res.__selftype__ = objcls
-		res.__call__ = method(function(code_with(self.___call__.__code__, name=f"<overload handler of {self.__qualname__} for {try_repr(obj if (obj is not None) else objcls)}>"), self.___call__.__globals__), res)
+		res.__call__ = method(function(code_with(self.___call__.__code__, name=f"<overload handler of {self.__qualname__} for {object.__repr__(obj if (obj is not None) else objcls)}>"), self.___call__.__globals__), res)
 
 		return (method(res, obj) if (obj is not None) else res)
 
@@ -1024,7 +1031,7 @@ class wrappedclass:
 class singledispatch: # TODO
 	def __init__(self, f):
 		self.f = f
-		self.registry = dict()
+		self.registry = weakref.WeakKeyDictionary()
 
 	def __call__(self, x, *args, **kwargs):
 		return self.f(x, *args, **kwargs)
@@ -1340,7 +1347,7 @@ def logdumb(**kwargs): return log(raw=True, end='', **kwargs)
 def logstart(x):
 	""" from utils[.nolog] import *; logstart(name) """
 	if (log._logged_utils_start is None): log._logged_utils_start = False; return
-	#if ((name := inspect.stack(0)[1].frame.f_globals.get('__name__')) is not None):
+	#if ((name := next(callstack()).f_globals.get('__name__')) is not None):
 	if (log._logged_start.get(x) is True): return
 	log._logged_start[x] = True
 	log(x+'\033[m...', end=' ') #, nolog=(x == 'Utils'))
@@ -1489,7 +1496,7 @@ class DB:
 			self.serializer = serializer
 
 	def register(self, *fields):
-		globals = inspect.stack(0)[1].frame.f_globals
+		globals = next(callstack()).f_globals
 
 		with self.lock:
 			for field in fields:
@@ -2666,11 +2673,11 @@ def each(*x): pass
 @funcdecorator
 def apmain(f):
 	def decorated(*, nolog=None):
-		if (nolog is None): nolog = not any(log._logged_start)
-		if (hasattr(f, '_argdefs')): # TODO: move out of `decorated()`?
-			while (f._argdefs):
-				args, kwargs = f._argdefs.popleft()
+		if (nolog is None): nolog = (not any(log._logged_start))
+		if ((argdefs := getattr(f, '_argdefs', None)) is not None): # TODO: move out of `decorated()`?
+			for args, kwargs in argdefs:
 				argparser.add_argument(*args, **kwargs)
+			else: del f._argdefs
 		argparser.set_defaults(func=lambda *_: sys.exit(argparser.print_help()))
 		cargs = argparser.parse_args()
 		if (not nolog): logstarted()
@@ -2685,9 +2692,10 @@ def apcmd(*args, **kwargs):
 	def decorator(f):
 		nonlocal args, kwargs
 		subparser = _getsubparser(*args, **kwargs).add_parser(f.__name__.removesuffix('_'), help=f.__doc__)
-		if (hasattr(f, '_argdefs')):
-			for args, kwargs in f._argdefs:
+		if ((argdefs := getattr(f, '_argdefs', None)) is not None):
+			for args, kwargs in argdefs:
 				subparser.add_argument(*args, **kwargs)
+			else: del f._argdefs
 		subparser.set_defaults(func=f)
 		return f
 	return decorator
@@ -3214,7 +3222,7 @@ class _CStream: # because I can.
 		return ('\033[F' if (sys.flags.interactive) else super().__repr__())
 class IStream(_CStream):
 	def __rshift__(self, x):
-		globals = inspect.stack(0)[1].frame.f_globals
+		globals = next(callstack()).f_globals
 		globals[x] = type(globals.get(x, ''))(self.ifd.readline().rstrip('\n')) # obviousity? naaooo
 		return self
 class OStream(_CStream):
@@ -3235,7 +3243,7 @@ class NonLoggingException(Exception): pass
 
 def exit(c=None, code=None, raw=False, nolog=None):
 	if (nolog is None): nolog = not any(log._logged_start)
-		#name = inspect.stack(0)[1].frame.f_globals.get('__name__')
+		#name = next(callstack()).f_globals.get('__name__')
 		#nolog = not (name is not None and log._logged_start.get(name))
 	if (not nolog and sys.stderr.isatty()): print('\r\033[K', file=sys.stderr, flush=True)
 	unlocklog()
