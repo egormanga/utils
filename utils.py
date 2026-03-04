@@ -146,6 +146,7 @@ method_descriptor = types.MethodDescriptorType
 generator = types.GeneratorType
 coroutine = types.CoroutineType
 async_generator = types.AsyncGeneratorType
+CellType = types.CellType
 MappingProxyType = types.MappingProxyType
 CodeType = types.CodeType
 TracebackType = types.TracebackType
@@ -1040,27 +1041,13 @@ class singledispatch: # TODO
 		self.registry[first(f.__annotations__.values())] = f
 		return self
 
-def ishashable(x):
-	try: hash(x)
-	except TypeError: return False
-	else: return True
-
-#@dispatch
-#def tohashable(x: ishashable): return x
-#@dispatch
-#def tohashable(d: typing.Dict): return tuple((k, tohashable(v)) for k, v in d.items())
-#@dispatch
-#def tohashable(x: typing.Iterator | str | bytes | range | frozenset): return x
-#@dispatch
-#def tohashable(l: typing.Iterable): return tuple(map(tohashable, l))
-#@dispatch
-#def tohashable(x: typing.Hashable): return x
-
+def ishashable(x): return (getattr(x, '__hash__', None) is not None)
 def tohashable(x):
 	try: hash(x)
 	except TypeError:
 		if (isinstance(x, typing.Dict)): return tuple((k, tohashable(v)) for k, v in x.items())
 		if (isinstance(x, typing.Iterable)): return tuple(map(tohashable, x))
+		if (isinstance(x, CellType)): return id(x)
 		raise
 	else: return x
 
@@ -1560,13 +1547,14 @@ class DB:
 			self.file.seek(0)
 db = DB()
 
-def format_base(x: int | float, base=None, *, pad=False, prefix='') -> str:
-	""" base: `(step, names)' [ex: `(1024, ('b', 'kb', 'mb', 'gb', 'tb', 'pb')'], default: `(1000, ' KMB')'
-	names should be non-decreasing in length for correct use in fixed-width mode.
-	whitespace character will be treated as nothing.
+def format_base(x: int | float, base='decimal', *, pad=False, prefix='') -> str:
+	""" base: `(step, names)' or preset name [ex: `bytes' or `(1024, ('B', 'KB', 'MB', 'GB', 'TB', 'PB')'], default: `(1000, ' KMB')'
+
+	Names should be non-decreasing in length for correct use in fixed-width mode.
+	Whitespace character will be treated as nothing.
 	"""
 
-	if (base in (None, True)): base = (1000, ' KMB')
+	if (isinstance(base, str)): base = format_base.bases[base]
 	step, names = base
 
 	l = len(names)
@@ -1576,6 +1564,10 @@ def format_base(x: int | float, base=None, *, pad=False, prefix='') -> str:
 	                  for b, v in ((i, int(x // (step**(l-ii)))) for ii, i in enumerate(reversed(names), 1))
 	                  if v >= 1) # TODO: fractions; negative
 	except StopIteration: return '0'
+format_base.bases = {
+	'decimal': (1000, ' KMB'),
+	'bytes': (1024, ('B', 'KB', 'MB', 'GB', 'TB', 'PB')),
+}
 
 def progress(cv, mv, *, pv="▏▎▍▌▋▊▉█", fill='░', border='│', prefix='', fixed=True, print=True, **kwargs): # TODO: optimize
 	return getattr(Progress(mv, chars=pv, border=border, prefix=prefix, fixed=fixed, **kwargs), 'print' if (print) else 'format')(cv)
@@ -1605,7 +1597,7 @@ class Progress:
 
 		fstr = (self.prefix + ('%s/%s (%d%%%s) ' if (not self.fixed) else f"%{l}s/%-{l}s (%-3d%%%s) "))
 		r = (fstr % (
-			*((cv, self.mv) if (not add_base) else ((format_base(i, base=add_base)) for i in (cv, self.mv))),
+			*((cv, self.mv) if (not add_base) else ((format_base(i, base=('decimal' if (add_base is True) else add_base))) for i in (cv, self.mv))),
 			(cv*100//self.mv if (self.mv) else 0),
 			((', ' + self.format_speed_eta(cv, self.mv, (time.time() - self.started), fixed=self.fixed, add_base=add_base)) if (add_speed_eta) else ''),
 		))
@@ -1637,7 +1629,7 @@ class Progress:
 		speed_u = 0
 		for i in (60, 60, 24):
 			if (speed < 1): speed *= i; speed_u += 1
-		if (add_base): speed = format_base(speed, base=add_base)
+		if (add_base): speed = format_base(speed, base=('decimal' if (add_base is True) else add_base))
 		else: speed = round(speed, 2)
 
 		return f"{speed}/{'smhd'[speed_u]}, {eta} ETA"
@@ -1654,7 +1646,7 @@ class Progress:
 		self.printed = (out is sys.stderr)
 
 	def l(self, add_base):
-		return (len(S(self.mv)) if (not add_base) else len(format_base(self.mv, base=(None if add_base is True else add_base), pad=True)))
+		return (len(S(self.mv)) if (not add_base) else len(format_base(self.mv, base=('decimal' if (add_base is True) else add_base), pad=True)))
 
 class ProgressPool:
 	#@dispatch
@@ -1781,9 +1773,13 @@ class ThreadedProgressPool(ProgressPool, threading.Thread):
 		self.join()
 		if (sys.stderr.isatty()): print(end='\r\033[K', file=sys.stderr, flush=True)
 
-def progrange(start, stop=None, step=1, **kwargs):
+def progrange(start, stop=None, step=1, *, k: int = None, **kwargs):
 	parseargs(kwargs, fixed=True)
 	if (stop is None): start, stop = 0, start
+	if (k is not None):
+		start *= k
+		stop *= k
+		step *= k
 
 	cv = (stop - start)
 	with Progress(cv, **kwargs) as p:
@@ -1793,13 +1789,22 @@ def progrange(start, stop=None, step=1, **kwargs):
 		p.print(stop)
 
 @dispatch
-def progiter(iterator: typing.Iterator, l: int): # TODO: why yield?
-	return (next(iterator) for _ in progrange(l))
+def progiter(iterator: typing.Iterator, l: int, **kwargs):
+	return (next(iterator) for _ in progrange(l, **kwargs))
 
 @dispatch
-def progiter(iterable: typing.Iterable):
+def progiter(iterable: typing.Iterable, **kwargs):
 	l = tuple(iterable)
-	return (i for _, i in zip(progrange(len(l)), l))
+	return (i for _, i in zip(progrange(len(l), **kwargs), l))
+
+@dispatch
+def progenumerate(iterator: typing.Iterator, l: int, **kwargs):
+	yield from zip(progrange(l, **kwargs), iterator)
+
+@dispatch
+def progenumerate(iterable: typing.Iterable, **kwargs):
+	l = tuple(iterable)
+	yield from zip(progrange(len(l), **kwargs), l)
 
 def testprogress(n=1000, sleep=0.002, **kwargs):
 	parseargs(kwargs, fixed=True)
@@ -2687,20 +2692,20 @@ def apmain(f):
 @dispatch
 def apcmd(f: callable): return apcmd()(f)
 @dispatch
-def apcmd(*args, **kwargs):
+def apcmd(*aliases, **kwargs):
 	@funcdecorator(suppresstb=False)
 	def decorator(f):
-		nonlocal args, kwargs
-		subparser = _getsubparser(*args, **kwargs).add_parser(f.__name__.removesuffix('_'), help=f.__doc__)
+		nonlocal kwargs
+		subparser = _getsubparsers(**kwargs).add_parser(f.__name__.removesuffix('_'), help=f.__doc__, aliases=aliases)
 		if ((argdefs := getattr(f, '_argdefs', None)) is not None):
 			for args, kwargs in argdefs:
 				subparser.add_argument(*args, **kwargs)
 			else: del f._argdefs
-		subparser.set_defaults(func=f)
+		subparser.set_defaults(func=lambda *args, **kwargs: sys.exit(f(*args, **kwargs)))
 		return f
 	return decorator
 @cachedfunction
-def _getsubparser(*args, **kwargs): return argparser.add_subparsers(*args, **kwargs)
+def _getsubparsers(**kwargs): return argparser.add_subparsers(**kwargs)
 
 def aparg(*args, **kwargs):
 	@funcdecorator(suppresstb=False)
