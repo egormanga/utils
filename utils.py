@@ -86,6 +86,7 @@ _autoimports = (
 	'numbers',
 	'secrets',
 	'termios',
+	'weakref',
 	'zipfile',
 	'calendar',
 	'datetime',
@@ -935,33 +936,31 @@ def _inspect_signature(*args, **kwargs) -> inspect.Signature:
 	if (sys.version_info < (3,10)): kwargs.pop('eval_str', None)
 	return inspect.signature(*args, **kwargs)
 
-def _inspect_get_annotations(x, *, globals=None, locals=None, eval_str=False):
-	try: _get_annotations = inspect.get_annotations
-	except AttributeError: pass
-	else: return _get_annotations(x, globals=globals, locals=locals, eval_str=eval_str)
-
-	try: res = x.__annotations__.copy()
-	except AttributeError: return {}
-	if (eval_str):
-		for k, v in res.items():
-			try: res[k] = eval(v, globals, locals)
-			except Exception: pass
-	return res
+try: from inspect import get_annotations as _get_annotations
+except ImportError:
+	def _get_annotations(x, *, globals=None, locals=None, eval_str=False):
+		try: res = x.__annotations__.copy()
+		except AttributeError: return {}
+		if (eval_str):
+			for k, v in res.items():
+				try: res[k] = eval(v, globals, locals)
+				except Exception: pass
+		return res
 
 @dispatch
-def get_annotations(classdict: lambda x: isinstance(x, dict) and x.get('__module__') in sys.modules, *, eval_str=True, uncomment=False, globals=None, locals=None): return get_annotations(classdict.get('__annotations__', {}), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(sys.modules.get(classdict['__module__']), '__dict__', None)), locals=(locals if (locals is not None or not eval_str) else classdict))
+def get_annotations(classdict: lambda x: isinstance(x, dict) and x.get('__module__') in sys.modules, *, eval_str=True, uncomment=False, globals=None, locals=None): return get_annotations((annotationlib.call_annotate_function((annotationlib.get_annotate_from_class_namespace(classdict) or (lambda _: {})), annotationlib.Format.STRING) if (sys.version_info >= (3,14)) else classdict.get('__annotations__', {})), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(sys.modules.get(classdict['__module__']), '__dict__', None)), locals=(locals if (locals is not None or not eval_str) else classdict))
 @dispatch
 def get_annotations(annotations: dict, *, eval_str=False, uncomment=False, globals=None, locals=None): return {k: (e if (eval_str and isinstance(v, str) and (uncomment or not v.lstrip().startswith('#')) and (e := try_eval(v.lstrip().removeprefix('#').split('--')[0], globals, locals))) else v) for k, v in annotations.items()}
 @dispatch
 def get_annotations(x: lambda x: hasattr(x, '__wrapped__'), **kwargs): return get_annotations(x.__wrapped__, **kwargs)
 @dispatch
-def get_annotations(cls: type, *, properties=False, eval_str=True, uncomment=False, globals=None, locals=None): return (get_annotations(_inspect_get_annotations(cls), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(sys.modules.get(cls.__module__, {}), '__dict__', None)), locals=(locals if (locals is not None or not eval_str) else dict(vars(cls)))) | ({k: r for k, v in vars(cls).items() if isinstance(v, (property, functools.cached_property)) and (r := get_annotations(v, eval_str=eval_str, uncomment=uncomment, globals=globals, locals=locals).get('return'))} if (properties) else {}))
+def get_annotations(cls: type, *, properties=False, eval_str=True, uncomment=False, globals=None, locals=None): return (get_annotations(_get_annotations(cls), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(sys.modules.get(cls.__module__, {}), '__dict__', None)), locals=(locals if (locals is not None or not eval_str) else dict(vars(cls)))) | ({k: r for k, v in vars(cls).items() if isinstance(v, (property, functools.cached_property)) and (r := get_annotations(v, eval_str=eval_str, uncomment=uncomment, globals=globals, locals=locals).get('return'))} if (properties) else {}))
 @dispatch
-def get_annotations(m: module, *, eval_str=True, uncomment=False, globals=None, locals=None): return get_annotations(_inspect_get_annotations(m), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(f, '__dict__', None)), locals=locals)
+def get_annotations(m: module, *, eval_str=True, uncomment=False, globals=None, locals=None): return get_annotations(_get_annotations(m), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(f, '__dict__', None)), locals=locals)
 @dispatch
 def get_annotations(p: functools.partial | functools.cached_property, **kwargs): return get_annotations(p.func, **kwargs)
 @dispatch
-def get_annotations(f: callable, *, eval_str=True, uncomment=False, globals=None, locals=None): return get_annotations(_inspect_get_annotations(f), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(f, '__globals__', None)), locals=locals)
+def get_annotations(f: callable, *, eval_str=True, uncomment=False, globals=None, locals=None): return get_annotations(_get_annotations(f), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(f, '__globals__', None)), locals=locals)
 @dispatch
 def get_annotations(p: property, **kwargs): return get_annotations(p.fget or {}, **kwargs)
 
@@ -1955,13 +1954,16 @@ def singleton(*args, **kwargs): return lambda C: C(*args, **kwargs)
 class SingletonMeta(type):
 	_ready = bool()
 
-	@cachedfunction
 	@suppress_tb
 	def __new__(metacls, name, bases, classdict):
-		r = super().__new__(metacls, name, bases, classdict)
-		if (metacls._ready): return r()
+		cls = super().__new__(metacls, name, bases, classdict)
+		if (metacls._ready): return cls()
 		metacls._ready = True
-		return r
+		return cls
+
+	@cachedfunction
+	def __call__(metacls, *args, **kwargs):
+		return super().__call__(*args, **kwargs)
 class Singleton(metaclass=SingletonMeta):
 	def __repr__(self):
 		return f"<Singleton {self.__class__.__qualname__}>"

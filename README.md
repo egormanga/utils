@@ -2,7 +2,7 @@
 
 Sdore's Utils lib
 
-Supports Python 3.9 — 3.11.
+Supports Python 3.10 — 3.14.
 
 
 ### Enabling Git hooks
