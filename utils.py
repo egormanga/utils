@@ -3153,7 +3153,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n', _im
 		print("\n \033[0;1m> This exception was caused by:\033[m\n", file=file)
 		Sexcepthook(exc.__cause__, file=file, linesep=_linesep, _import=_import)
 
-	if (__repl__ and not _import and tb is not None and (tb.tb_frame.f_code.co_filename.startswith('<stdin>') or tb.tb_frame.f_code.co_filename.startswith('<python-input-'))):
+	if (__repl__ and not _import and tb is not None and (tb.tb_frame.f_code.co_filename.startswith('<stdin') or tb.tb_frame.f_code.co_filename.startswith('<python-input-'))):
 		if (exctype is NameError and exc.args and
 		    (m := re.fullmatch(r"name '(\w+)' is not defined", exc.args[0])) is not None):
 			try:
