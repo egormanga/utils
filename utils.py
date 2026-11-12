@@ -30,7 +30,7 @@ class ModuleProxy(types.ModuleType):
 		self.__name__ = name
 
 	def __getattribute__(self, x):
-		module = __import__(name := object.__getattribute__(self, '__name__'))
+		module = __import__(name := super().__getattribute__('__name__'))
 		try: self.__doc__ = module.__doc__
 		except AttributeError: pass
 		try: next(callstack()).f_globals[name] = module
@@ -84,6 +84,7 @@ _autoimports = (
 	'getpass',
 	'hashlib',
 	'numbers',
+	'pathlib',
 	'secrets',
 	'termios',
 	'weakref',
@@ -168,6 +169,14 @@ def code_with(code, **kwargs):
 	return CodeType(*(kwargs.get(i, kwargs.get('co_'+i, getattr(code, 'co_'+i))) for i in ('argcount', 'kwonlyargcount', 'nlocals', 'stacksize', 'flags', 'code', 'consts', 'names', 'varnames', 'filename', 'name', 'firstlineno', 'lnotab', 'freevars', 'cellvars')))
 # TODO: func_with()
 
+def generator_with(gen, **kwargs): return function(code_with(gen.gi_code, **kwargs), gen.gi_frame.f_globals, argdefs=(gen.gi_frame.f_locals['.0'],))()
+def try_iterate(gen):
+	while (True):
+		gen_ = generator_with(gen)
+		try: yield from gen_
+		except Exception: continue
+		else: break
+
 def suppress_tb(f):
 	#f.__code__ = code_with(f.__code__, name=f.__qualname__, firstlineno=0, **{'linetable' if (sys.version_info >= (3,10)) else 'lnotab': (b'\xff'*(len(f.__code__.co_code)//2+1) if (sys.version_info >= (3,11)) else b'')})
 	f.__code__ = code_with(f.__code__, filename=f.__code__.co_filename+'\0')
@@ -220,7 +229,7 @@ def export(x):
 	if (name not in all): all.append(name)
 	return x
 
-def terminal_link(link, text=None): return f"\033]8;;{Sstr(link).noesc().fit(1634, bytes=True)}\033\\{text if (text is not None) else link}\033]8;;\033\\"
+def terminal_link(link, text=None, **params): return f"\033]8;{':'.join(f'{k}={v}' for k, v in params.items())};{Sstr(link).noesc().fit(1634, bytes=True)}\033\\{text if (text is not None) else link}\033]8;;\033\\"
 
 import pygments.lexers, pygments.formatters
 def highlight(s: str, *, lexer=pygments.lexers.PythonLexer(), formatter=pygments.formatters.TerminalFormatter(bg='dark')): return pygments.highlight(s, lexer, formatter)
@@ -228,6 +237,8 @@ def highlight(s: str, *, lexer=pygments.lexers.PythonLexer(), formatter=pygments
 _raise = object()
 @suppress_tb
 def first(l, /, default=_raise, fast=True):
+	""" fast=True raises a different StopIteration than next(). """
+
 	l = iter(l)
 
 	if (fast):
@@ -235,34 +246,55 @@ def first(l, /, default=_raise, fast=True):
 		if (default is _raise): next(l)  # raises a _different_ StopIteration
 		return default
 
-	try: return next(l)
-	except StopIteration:
-		if (default is _raise): raise
-		return default
+	return (next(l, default) if (default is not _raise) else next(l))
 @suppress_tb
 def last(l, /, default=_raise):
 	l = iter(l)
-
-	try: r = next(l)
-	except StopIteration:
-		if (default is _raise): raise
-		return default
-
+	r = (next(l, default) if (default is not _raise) else next(l))
 	for r in l: pass
 	return r
 @suppress_tb
 def only(l, /, default=_raise):
 	l = iter(l)
-	try: return next(l)
-	except StopIteration:
-		if (default is _raise): raise
-		return default
+	try: return (next(l, default) if (default is not _raise) else next(l))
 	finally:
 		try: next(l)
 		except StopIteration: pass
 		else: raise StopIteration("Only a single value expected")
 
-def groupby(x, /, key=None): return itertools.groupby(sorted(x, key=key), key=key)
+def uniquize(it: typing.Iterable, key=None) -> typing.Iterable:
+	was = set()
+	were = list()
+	for i in it:
+		k = (key(i) if (key is not None) else i)
+		if (k in was or k in were): continue
+		yield i
+		try: was.add(k)
+		except TypeError: were.append(k)
+
+def _id(x): return (id(x), x)
+def groupby(x, /, key=None, by_id=False):
+	if by_id: key, key_ = lambda x: _id(key_(x)), key
+	res = itertools.groupby(sorted(x, key=key), key=key)
+	return (res if not by_id else ((k, v) for (_, k), v in res))
+
+class cachedclassproperty:
+	_empty = object()
+
+	__slots__ = ('__wrapped__', '_cached')
+
+	def __init__(self, f):
+		self.__wrapped__ = f
+		self._cached = self._empty
+
+	def __get__(self, obj, objcls):
+		if (self._cached is self._empty): self._cached = self.__wrapped__(objcls)
+		return self._cached
+
+	def clear_cache(self):
+		self._cached = self._empty
+cachedproperty = functools.cached_property
+Scachedproperty = cachedclassproperty # TODO FIXME!
 
 def S(*x, ni_ok=False):
 	""" Convert `x' to an instance of corresponding S-type. """
@@ -403,15 +435,14 @@ class Slist(S_type, list): # TODO: fix everywhere: type(x) == y --> isinstance(x
 
 	def filter_bool(self):
 		""" Return self without items for which `bool(value)' evaluates to `False'. """
-		return Sdict({k: v for k, v in self.items() if v})
+		return Slist(i for i in self if i)
 
 	def filter_isinstance(self, type):
 		""" Return self with only items of type `type'. """
 		return Slist(i for i in self if isinstance(i, type))
 
 	def uniquize(self, key=None):
-		was = list()
-		return Slist(was.append(key(i) if (key is not None) else i) or i for i in self if (key(i) if (key is not None) else i) not in was)  # such a dirty hack.. upd. even more dirty for unhashable
+		return Slist(uniquize(self, key=key))
 
 	#def wrap(self,
 
@@ -443,57 +474,71 @@ class Sint(S_type, int):
 		return f"+{self}" if (self > 0) else str(self)
 
 class Sstr(S_type, str):
-	_subtrans = str.maketrans({
-		'0': '₀',
-		'1': '₁',
-		'2': '₂',
-		'3': '₃',
-		'4': '₄',
-		'5': '₅',
-		'6': '₆',
-		'7': '₇',
-		'8': '₈',
-		'9': '₉',
-		'+': '₊',
-		'-': '₋',
-		'=': '₌',
-		'(': '₍',
-		')': '₎',
-		'a': 'ₐ',
-		'e': 'ₑ',
-		'o': 'ₒ',
-		'x': 'ₓ',
-		'ə': 'ₔ',
-		'h': 'ₕ',
-		'k': 'ₖ',
-		'l': 'ₗ',
-		'm': 'ₘ',
-		'n': 'ₙ',
-		'p': 'ₚ',
-		's': 'ₛ',
-		't': 'ₜ',
-	})
+	#_unicode_letters = list(itertools.chain(*(v for k, v in groupby(map(chr, range(0x110000)), key=unicodedata.category) if k[0] == 'L')))
 
-	_suptrans = str.maketrans({
-		'0': '⁰',
-		'1': '¹',
-		'2': '²',
-		'3': '³',
-		'4': '⁴',
-		'5': '⁵',
-		'6': '⁶',
-		'7': '⁷',
-		'8': '⁸',
-		'9': '⁹',
-		'.': '·',
-		'+': '⁺',
-		'-': '⁻',
-		'=': '⁼',
-		'(': '⁽',
-		')': '⁾',
-		'i': 'ⁱ',
-		'n': 'ⁿ',
-	})
+	@cachedclassproperty
+	def _unicode_letters(cls): return tuple(map(chr, itertools.chain(
+		range(0x20, 0x7F+1),
+		range(0xC0, 0x2AF+1),
+		range(0x370, 0x52F+1),
+		range(0x1C80, 0x1FFF+1),
+		range(0x2C60, 0x2C7F+1),
+		range(0x2DE0, 0x2DFF+1),
+		range(0xA640, 0xA69F+1),
+		range(0xA720, 0xA7FF+1),
+		range(0xAB30, 0xAB6F+1),
+	)))
+
+	@staticmethod
+	def _unicode_modifier(x, kind='modifier'):
+		name = unicodedata.name(x).casefold()
+		script, _, letter = name.partition(' ')
+		letter = letter.replace('letter ', '')
+		errors = list()
+		for i in (
+			f"{kind} {name}",
+			f"{kind} {letter}",
+			f"{kind} letter {letter}",
+			f"{kind} letter {name.replace('letter ', '')}",
+			f"{kind} letter {letter.replace('small ', '')}",
+			f"{kind} letter {name.replace('small letter ', '')}",
+			name.replace(script, f"{script} {kind}"),
+		):
+			try: return unicodedata.lookup(i)
+			except KeyError as ex: errors.append(ex); continue
+		else: raise ExceptionGroup(name, errors)
+
+	@classmethod
+	def _unicode_modifier_try(cls, x, *args, **kwargs):
+		try: return cls._unicode_modifier(x, *args, **kwargs)
+		except Exception:
+			try: return cls._unicode_modifier(x.casefold(), *args, **kwargs)
+			except Exception: return None
+
+	@classmethod
+	def _unicode_modtrans(cls, s, *args, best_effort=False, **kwargs):
+		f = (cls._unicode_modifier_try if (best_effort) else cls._unicode_modifier)
+		return {ord(i): ord(x) for i in s if (x := f(i, *args, **kwargs)) is not None}
+
+	@cachedclassproperty
+	def _suptrans(cls): return (
+		str.maketrans(
+			".-SɃε",
+			"·⁻꟱ᴯᵋ",
+		)
+		| cls._unicode_modtrans("()+=0123456789in", 'superscript')
+		| cls._unicode_modtrans(cls._unicode_letters, best_effort=True)
+		#| cls._unicode_modtrans(cls._unicode_letters, 'superscript', best_effort=True)  # adds nothing
+	)
+
+	@cachedclassproperty
+	def _subtrans(cls): return (
+		str.maketrans(
+			"-ι",
+			"₋ͺ",
+		)
+		| cls._unicode_modtrans(cls._unicode_letters, 'subscript', best_effort=True)
+	)
 
 	def __getitem__(self, x):
 		return Sstr(str.__getitem__(self, x))
@@ -502,7 +547,7 @@ class Sstr(S_type, str):
 		return Sstr().join(i for i in self if i in x)
 
 	def __or__(self, x):
-		return self if (self.strip()) else x
+		return (self if (self.strip()) else x)
 
 	def __add__(self, s):
 		return S(super().__add__(s))
@@ -523,17 +568,17 @@ class Sstr(S_type, str):
 		n = max(0, (n % (len(self) + len(sep) + start_delay)) - start_delay)
 		return Sstr((self + sep)[n:] + self[:n]).fit(l)
 
-	def hyperlink(self, text=None):
-		return Sstr(terminal_link(self, text))
+	def hyperlink(self, text=None, **params):
+		return Sstr(terminal_link(self, text, **params))
 
 	def join(self, l, *, first='', last=None):
 		l = tuple(map(str, l))
-		r = (str.join(self, l[:-1]) + ((last if (isinstance(last, str)) else last[len(l) > 2]) if (last is not None) else self) + l[-1]) if (len(l) > 1) else l[0] if (l) else ''
+		r = ((str.join(self, l[:-1]) + ((last if (isinstance(last, str)) else last[len(l) > 2]) if (last is not None) else self) + l[-1]) if (len(l) > 1) else l[0] if (l) else '')
 		if (r): r = first+r
 		return Sstr(r)
 
 	def bool(self, minus_one=True):
-		return bool(self) and self.casefold() not in ('0', 'false', 'no', 'нет', '-1'*(not minus_one))
+		return (bool(self) and self.casefold() not in ('0', 'false', 'no', 'нет', '-1'*(not minus_one)))
 
 	def indent(self, n=None, char=None, *, tab_width=8, foldempty=True, first=True):
 		if (not self): return self
@@ -589,6 +634,9 @@ class Sstr(S_type, str):
 	def splitlines(self, *args, **kwargs):
 		return Slist(map(Sstr, str.splitlines(self, *args, **kwargs)))
 
+	def replace(self, *args, **kwargs):
+		return Sstr(super().replace(*args, **kwargs))
+
 	def filter(self, chars):
 		return Sstr().join(i for i in self if i in chars)
 
@@ -604,19 +652,17 @@ class Sstr(S_type, str):
 		return Sstr().join(s)
 
 	def fullwidth(self):
-		return sum(c.isprintable() and not unicodedata.combining(c) for c in self)
+		return sum((c.isprintable() and not unicodedata.combining(c)) for c in self)
 
 	def sub(self):
 		return self.translate(self._subtrans)
-
-	def super(self): logexception(DeprecationWarning(" *** super() → sup() *** ")); return self.sup()
 
 	def sup(self):
 		return self.translate(self._suptrans)
 
 def Sbool(x=bool(), *args, **kwargs): # No way to derive a class from bool
 	x = S(x)
-	return x.bool(*args, **kwargs) if (hasattr(x, 'bool')) else bool(x)
+	return (x.bool(*args, **kwargs) if (hasattr(x, 'bool')) else bool(x))
 
 def funcdecorator(df=None, /, *, signature=None, suppresstb=True): # TODO: __dict__?
 	if (df is None): return lambda df: funcdecorator(df, signature=signature, suppresstb=suppresstb)
@@ -633,8 +679,10 @@ def funcdecorator(df=None, /, *, signature=None, suppresstb=True): # TODO: __dic
 
 		if (suppresstb): nf = suppress_tb(nf) # TODO: option to disable
 
-		nf.__name__, nf.__qualname__, nf.__module__, nf.__doc__, nf.__annotations__ = \
-		 f.__name__,  f.__qualname__,  f.__module__,  f.__doc__,  f.__annotations__ # TODO: .copy()?
+		nf.__name__, nf.__qualname__, nf.__module__, nf.__doc__ = \
+		 f.__name__,  f.__qualname__,  f.__module__,  f.__doc__
+		try: nf.__annotations__ = f.__annotations__ # TODO: .copy()?
+		except AttributeError: pass
 
 		if (signature is not None):
 			if (callable(signature)): signature = signature(inspect.signature(f))
@@ -666,9 +714,7 @@ def funcdecorator(df=None, /, *, signature=None, suppresstb=True): # TODO: __dic
 
 	return ndf
 
-def typecheck(x, t):
-	try: return typing_validation.is_valid(x, t)
-	except Exception: return False # FIXME: https://github.com/hashberg-io/typing-validation/issues/24
+def typecheck(x, t): return typing_validation.is_valid(x, t)
 
 class dispatch:
 	""" Decorator which implements function overloading (call dispatching) by argument and return type annotations.
@@ -695,6 +741,7 @@ class dispatch:
 
 	__slots__ = ('__call__', '__qualname__', '__origname__', '__origmodule__', '__origclosure__', '__selftype__')
 	__overloaded_functions = Sdict(dict)
+	__overloaded_functions_prototypes = dict()
 	__overloaded_functions_docstrings = Sdict(dict)
 
 	def __init__(self, f):
@@ -706,6 +753,10 @@ class dispatch:
 
 		fsig = _inspect_signature(f, eval_str=True)
 		fsig._parameters = MappingProxyType({k: self.__Param.from_inspect_parameter(v) for k, v in fsig._parameters.items()})
+
+		if ((proto := self.__overloaded_functions_prototypes.get((self.__origmodule__, self.__qualname__))) is not None):
+			if (isinstance(proto.return_annotation, type) and not self.__typecheck(fsig.return_annotation, type[proto.return_annotation])): raise TypeError(fsig, proto)
+			# TODO: parameters
 
 		self.__overloaded_functions[self.__origmodule__, self.__qualname__][fsig] = f
 		self.__overloaded_functions_docstrings[self.__origmodule__, self.__qualname__][fsig] = f.__doc__
@@ -842,6 +893,7 @@ class dispatch:
 	@classmethod
 	#@funcdecorator # TODO
 	def meta(cls, f):
+		cls.__overloaded_functions_prototypes[f.__module__, f.__qualname__] = _inspect_signature(f, eval_str=True)
 		if (f.__doc__): cls.__overloaded_functions_docstrings[f.__module__, f.__qualname__][None] = f.__doc__
 		return f
 
@@ -901,7 +953,6 @@ class DispatchRetvalError(DispatchError):
 		return (
 			f"Return value {try_repr(self.retval)} of type {type(self.retval)} doesn't match the return annotation of the corresponding '{self.dp.__qualname__}' signature:\n"
 			f"  {self.dp.__origname__}{_format_inspect_signature({i.name: i for i in self.params}, self.rettype, _call_lambdas=True)}\n"
-			f"[called as: {self.dp.__origname__}({', '.join((*(S(try_repr(i)).fit(32) for i in self.args), *(S(f'{k}={try_repr(v)}').fit(32) for k, v in self.kwargs.items())))})]"
 			+ super().__str__()
 		)
 
@@ -948,7 +999,7 @@ except ImportError:
 		return res
 
 @dispatch
-def get_annotations(classdict: lambda x: isinstance(x, dict) and x.get('__module__') in sys.modules, *, eval_str=True, uncomment=False, globals=None, locals=None): return get_annotations((annotationlib.call_annotate_function((annotationlib.get_annotate_from_class_namespace(classdict) or (lambda _: {})), annotationlib.Format.STRING) if (sys.version_info >= (3,14)) else classdict.get('__annotations__', {})), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(sys.modules.get(classdict['__module__']), '__dict__', None)), locals=(locals if (locals is not None or not eval_str) else classdict))
+def get_annotations(classdict: lambda x: (isinstance(x, dict) and x.get('__module__') in sys.modules), *, eval_str=True, uncomment=False, globals=None, locals=None): return get_annotations((annotationlib.call_annotate_function((annotationlib.get_annotate_from_class_namespace(classdict) or (lambda _: classdict.get('__annotations__', {}))), annotationlib.Format.STRING) if (sys.version_info >= (3,14)) else classdict.get('__annotations__', {})), eval_str=eval_str, uncomment=uncomment, globals=(globals if (globals is not None or not eval_str) else getattr(sys.modules.get(classdict['__module__']), '__dict__', None)), locals=(locals if (locals is not None or not eval_str) else classdict))
 @dispatch
 def get_annotations(annotations: dict, *, eval_str=False, uncomment=False, globals=None, locals=None): return {k: (e if (eval_str and isinstance(v, str) and (uncomment or not v.lstrip().startswith('#')) and (e := try_eval(v.lstrip().removeprefix('#').split('--')[0], globals, locals))) else v) for k, v in annotations.items()}
 @dispatch
@@ -1124,25 +1175,6 @@ def lrucachedfunction(maxsize=None, typed=True):
 		return cached
 	return decorator
 def lrucachedclass(c): return lrucachedfunction(c)
-
-class cachedclassproperty:
-	_empty = object()
-
-	__slots__ = ('__wrapped__', '_cached')
-
-	def __init__(self, f):
-		self.__wrapped__ = f
-		self._cached = self._empty
-
-	def __get__(self, obj, objcls):
-		if (self._cached is self._empty): self._cached = self.__wrapped__(obj)
-		return self._cached
-
-	def clear_cache(self):
-		self._cached.clear()
-try: cachedproperty = functools.cached_property
-except AttributeError: cachedproperty = cachedclassproperty # TODO FIXME!
-Scachedproperty = cachedclassproperty # TODO FIXME!
 
 @dispatch
 def allsubclasses(cls: type):
@@ -1344,7 +1376,7 @@ def logstate(state, x=''):
 def logstarted(x=''): """ if (__name__ == '__main__'): logstart(); main() """; logstate('\033[94mstarted', x)
 def logimported(x=''): """ if (__name__ != '__main__'): logimported() """; logstate('\033[96mimported', x)
 def logok(x=''): logstate('\033[92mok', x)
-def logex(x=''): logstate('\033[91merror', unraise(x))
+def logex(x=''): logstate('\033[91merror', x)
 def logwarn(x=''): logstate('\033[93mwarning', x)
 def setlogoutput(f): global logoutput; logoutput = f
 def setlogfile(f): global logfile; logfile = open(f, 'a') if (isinstance(f, str)) else f
@@ -1423,6 +1455,65 @@ def catch(*ex: BaseException):
 	return decorator
 @dispatch
 def catch(f: function): return catch(BaseException)(f)
+
+class group_exceptions:
+	""" Try to evaluate inner blocks, group exceptions from all unless one succeeds.
+	Note: returned values do not get passed from inner blocks — store them in a variable instead.
+	Note: `except_ as ex` without instantiation yields the same stateful instance,
+	      making `ex' store the latest exception (or lack thereof) among such `except_'s.
+	      If you need to retrieve a specific block, use instantiation: `except_() as ex'.
+
+	Example:
+		with group_exceptions("Failed to do smth") as except_:
+			with except_: r = do_smth()
+			with except_(OSError) as ex: r = do_smth(fallback=True)
+			with except_():
+				log(f"Attempt #2 failed with {ex.cell_contents}, trying harder")
+				r = do_smth_else()
+		return r
+	"""
+
+	class _Grouper(Exception):
+		__slots__ = ('_except', 'exception')
+
+		# public:
+		exception: CellType
+
+		# internal:
+		_except: frozenset[BaseException]
+
+		def __init__(self, group, /, *except_: BaseException):
+			self.group, self._except = group, frozenset(except_)
+			self.exception = CellType()
+
+		def __call__(self, *except_: BaseException):
+			return self.__class__(self.group, *except_)
+
+		def __enter__(self):
+			return self.exception
+
+		def __exit__(self, exc_type, exc, tb):
+			self.exception.cell_contents = exc
+			if (exc is None): raise self
+			if (not self._except or any(i in self._except for i in exc_type.mro())):  # same behavior as CPython
+				self.group.exceptions.append(exc)
+				return True
+
+	__slots__ = ('message', 'exceptions')
+
+	def __init__(self, message=''):
+		self.message = message
+
+	def __enter__(self):
+		self.exceptions = list()
+		return self._Grouper(self)
+
+	def __exit__(self, exc_type, exc, tb):
+		if (exc_type is self._Grouper): return True  # success
+		if (self.exceptions):
+			eg = BaseExceptionGroup(self.message, self.exceptions)
+			if (exc is not None): raise exc from eg
+			else: raise eg
 
 def assert_(x): assert x; return True
 
@@ -1585,7 +1676,7 @@ class Progress:
 		return self
 
 	def __exit__(self, exc_type, exc, tb):
-		if (self.printed and self._pool is None and sys.stderr.isatty()): print(file=sys.stderr, flush=True)
+		if (self.printed and self._pool is None and sys.stderr.isatty()): print('\033]9;4;0\033\\', file=sys.stderr, flush=True)
 
 	def format(self, cv, width, *, add_base=None, add_speed_eta=None):
 		if (add_base is None): add_base = self.add_base
@@ -1640,7 +1731,7 @@ class Progress:
 
 		if (width is None): return
 
-		print('\033[K' + self.format(cv, width=width, **kwargs), end='\r', file=out, flush=flush)
+		print(f"\033]9;4;{f'1;{100*cv//self.mv}' if (self.mv is not None) else '3'}\033\\\033[K" + self.format(cv, width=width, **kwargs), end='\r', file=out, flush=flush)
 
 		self.printed = (out is sys.stderr)
 
@@ -1676,7 +1767,7 @@ class ProgressPool:
 		for p in reversed(self.p):
 			p.__exit__(exc_type, exc, tb)
 
-		if (self.printed and sys.stderr.isatty()): print(end='\033[J', file=sys.stderr, flush=True)
+		if (self.printed and sys.stderr.isatty()): print('\033]9;4;0\033\\', end='\033[J', file=sys.stderr, flush=True)
 
 	def print(self, *cvs, width=None):
 		if (not sys.stderr.isatty()): return
@@ -1939,7 +2030,7 @@ def iter_queue(q):
 def pm(x): return (+1 if (x) else -1)
 def constrain(x, lb, ub): return min(ub, max(lb, x))
 def prod(x, initial=1): return functools.reduce(operator.mul, x, initial)
-def average(x, default=None): return sum(x)/len(x) if (x) else default if (default is not None) else raise_(ValueError("average() arg is an empty sequence"))
+def average(x, default=None): return (sum(x)/len(x) if (x) else default if (default is not None) else raise_(ValueError("average() arg is an empty sequence")))
 
 global_lambdas = list() # TODO: WeakSet
 def global_lambda(l): global_lambdas.append(l); return l
@@ -2366,20 +2457,23 @@ class DefaultAttrDict(AttrDict):
 def defaultattrdict(*args, **kwargs) -> DefaultAttrDict: return DefaultAttrDict(defaultattrdict, *args, **kwargs)
 
 class Builder:
+	__slots__ = ('__wrapped__', '__calls__')
+
 	def __init__(self, cls, *args, **kwargs):
-		self.cls = cls
-		self.calls = collections.deque(((None, args, kwargs),))
+		super().__setattr__('__wrapped__', cls)
+		super().__setattr__('__calls__', collections.deque(((None, args, kwargs),)))
 
 	def __repr__(self):
-		return f"<{self.__class__.__name__} of {repr(self.cls).removeprefix('<').removesuffix('>')}>"
+		return f"<Builder of {repr(super().__getattribute__('__wrapped__')).removeprefix('<').removesuffix('>')}>"
 
-	def __getattr__(self, x):
-		return lambda *args, **kwargs: self.calls.append((x, args, kwargs)) and None or self
+	def __getattribute__(self, x):
+		super_ = super()
+		return lambda *args, **kwargs: super_.__getattribute__('__calls__').append((x, args, kwargs)) and None or self
 
 	def __call__(self):
 		instance = None
-		for method, args, kwargs in self.calls:
-			if (instance is None): instance = self.cls(*args, **kwargs)
+		for method, args, kwargs in super().__getattribute__('__calls__'):
+			if (instance is None): instance = super().__getattribute__('__wrapped__')(*args, **kwargs)
 			else: getattr(instance, method)(*args, **kwargs)
 		return instance
 
@@ -2396,11 +2490,11 @@ class MetaBuilder(type):
 			return f"<{self.__class__.__name__} {self.name!r}>"
 
 	def __prepare__(name, bases):
-		return type('', (dict,), {'__getitem__': lambda self, x: MetaBuilder.Var(x[2:]) if (x.startswith('a_') and x[2:]) else dict.__getitem__(self, x)})()
+		return type('', (dict,), {'__getitem__': lambda self, x: (MetaBuilder.Var(x[2:]) if (x.startswith('a_') and x[2:]) else dict.__getitem__(self, x))})()
 
 class AllAnnotationsMeta(type):
 	def __new__(metacls, name, bases, classdict):
-		if ('__allannotations__' not in (slots := classdict.get('__slots__', ()))): classdict['__slots__'] = ('__allannotations__', *slots)
+		if ((slots := classdict.get('__slots__', None)) is not None and '__allannotations__' not in slots): classdict['__slots__'] = ('__allannotations__', *slots)
 
 		cls = super().__new__(metacls, name, bases, classdict)
 		#cls.__allannotations__ = allannotations(cls, uncomment=True)
@@ -2919,10 +3013,26 @@ def walk_tb(tb, lasti: bool = False, has_next: bool = False):
 		yield (tb.tb_frame, tb.tb_lineno, *((tb.tb_lasti,) if (lasti) else ()), *(((tb.tb_next is not None),) if (has_next) else ()))
 		tb = tb.tb_next
 
+def Sdisplayhook(x, /):
+	builtins._ = None
+	if (x is None): return
+	try: print(end=highlight(repr(x)), flush=True)
+	except Exception: sys.__displayhook__(x)
+	except KeyboardInterrupt as ex: ex.__traceback__ = None; raise
+	else: builtins._ = x
+
+def _Sdisplayhook_install():
+	if (sys.displayhook is not Sdisplayhook):
+		if (not hasattr(sys, '_S_olddisplayhook')): sys._S_olddisplayhook = sys.displayhook
+		sys.displayhook = Sdisplayhook
+Sdisplayhook.install = _Sdisplayhook_install
+if (os.getenv('SDISPLAYHOOK', '')[:1].casefold() in '1yt' and sys.stdout.isatty()): Sdisplayhook.install()
+
 @suppress_tb
 def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n', _import=False):
-	if (exctype is None): exctype, exc, tb = sys.exc_info()
-	elif (exc is None): exc, exctype = exctype, type(exctype)
+	if (exctype is None): exctype, exc, tb = sys.exc_info()                                               # ()
+	elif (exc is None): exc, exctype = exctype, type(exctype)                                             # (ex)
+	elif (tb is None and isinstance(exc, TracebackType)): exc, exctype, tb = exctype, type(exctype), exc  # (ex, tb)
 
 	if (tb is None): tb = exc.__traceback__
 	if (file is None): file = sys.stderr
@@ -2931,19 +3041,17 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n', _im
 	srcs = Sdict(linecache.getlines)
 	res = list()
 
-	if (__repl__):
-		if (exctype is SyntaxError and exc.text and exc.text[exc.offset-1] == '?'):
-			topic = exc.text[:exc.offset-1]
-			try: help(eval(topic))
-			except Exception:
-				try: help(topic)
-				except Exception: pass
-				else: return
-			else: return
+	if (__repl__ and exctype is SyntaxError and exc.text and exc.text[exc.offset-1:].startswith('?')):
+		stmt = ast.parse(exc.text[:exc.offset-1]+'@_'+exc.text[exc.offset:], mode='eval')
+		expr = first(i for i in ast.walk(stmt) if isinstance(i, ast.BinOp) and isinstance(i.op, ast.MatMult)).left
+		try: topic = eval(compile(ast.Expression(expr), '<help>', mode='eval'), __import__('__main__').__dict__)
+		except Exception as ex: return Sexcepthook(ex, ex.__traceback__.tb_next, file=file, linesep=linesep, _import=_import)
+		else: return help(topic)
 
 	if (exc is not None and exc.__context__ is not None and not exc.__suppress_context__):
-		Sexcepthook(exc.__context__, file=file, linesep=_linesep, _import=_import)
-		print(" \033[0;1m> During handling of the above exception, another exception occurred:\033[m\n", file=file)
+		if (exc.__context__ is exc): print(f"\033[2m<same {exctype.__name__} as below>\033[22m", end=_linesep, file=file)
+		else: Sexcepthook(exc.__context__, file=file, linesep=_linesep, _import=_import)
+		print(" \033[0;1m> During handling of the above exception, another exception occurred:\033[m", end=_linesep*2, file=file)
 
 	for frame, lineno, lasti, has_next in walk_tb(tb, lasti=True, has_next=True):
 		code = frame.f_code
@@ -2951,11 +3059,12 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n', _im
 
 		filename = code.co_filename
 		name = code.co_name
+		qualname = getattr(code, 'co_qualname', name)
 		lines = set()
 		codepos = (first(itertools.islice(code.co_positions(), lasti//2, None), default=None) if (sys.version_info >= (3,11)) else None)
 		instr = (first(itertools.islice(filter(None, dis.Bytecode(code, current_offset=lasti, show_caches=True, adaptive=True).dis().splitlines()), lasti//2, None), default=None) if (codepos is not None) else None)
 
-		if (lineno is not None and lineno > 0 and not filename.endswith('\0') and (src := srcs[code.co_filename])):
+		if (lineno is not None and lineno > 0 and not filename.endswith('\0') and (src := (readline.get_history_item(readline.get_current_history_length()).splitlines() if (code.co_filename.startswith('<stdin')) else __import__('_pyrepl').readline.get_history_item(__import__('_pyrepl').readline.get_current_history_length()).splitlines() if (code.co_filename.startswith('<python-input')) else srcs[code.co_filename]))):
 			loff = float('inf')
 			found_name = bool()
 
@@ -3001,29 +3110,30 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n', _im
 			#for i in range(*sorted((frame.f_lineno-1, lineno))):
 			#	lines.add((i+1, src[i]))
 
-		res.append((filename, name, lineno, sorted(lines), frame, codepos))
+		res.append((filename, name, qualname, lineno, sorted(lines), frame, codepos))
 
 	if (res):
-		print("\033[0;91mTraceback\033[m \033[2m(most recent call last)\033[m:", file=file)
-		maxlnowidth = max((max(len(str(ln)) for ln, line, hline in lines) for filename, name, lineno, lines, frame, codepos in res if lines), default=0)
+		print("\033[0;91mTraceback\033[m \033[2m(most recent call last)\033[m:", end=_linesep, file=file)
+		maxlnowidth = max((max(len(str(ln)) for ln, line, hline in lines) for filename, name, qualname, lineno, lines, frame, codepos in res if lines), default=0)
 
 	last = lines = None
 	scope = dict()
 	lastlines = ...
 	repeated = int()
-	for filename, name, lineno, lines, frame, codepos in res:
+	for filename, name, qualname, lineno, lines, frame, codepos in res:
 		if (lines and not lastlines and _linesep is not None): print(end=_linesep, file=file)
 
 		if (os.path.commonpath((os.path.abspath(filename), os.getcwd())) != '/'): filename = os.path.relpath(filename)
+		fname = (f"\033[2m{qualname[:-len(name)]}\033[22m{name}" if (qualname != name) else name)
 
-		if ((filename, name, lineno) != last):
+		if ((filename, qualname, lineno) != last):
 			scope.clear()
-			if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[m\n", file=file); repeated = int()
+			if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[m", end=_linesep*2, file=file); repeated = int()
 
 			filepath = (os.path.dirname(filename)+os.path.sep if (os.path.dirname(filename)) else '')
 			link = (f"file://{socket.gethostname()}{os.path.realpath(filename)}" if (os.path.exists(filename)) else filename)
-			if (lines or (lineno is not None and lineno > 0 and not filename.endswith('\0'))): print(("  File " + terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(filename)}\033[m") + f", in \033[93m{terminal_link(repr(frame.f_globals[name]), name) if (name in frame.f_globals) else name}\033[m, line \033[94m{lineno}\033[m{':'*bool(lines)}"), file=file)
-			else: print(("  \033[2mFile " + terminal_link(link, f"\033[36m{filepath}\033[96m{os.path.basename(filename)}\033[0;2m") + f", in \033[93m{name}\033[0;2m, line \033[94m{lineno}\033[m"), file=file)
+			if (lines or (lineno is not None and lineno > 0 and not filename.endswith('\0'))): print(("  File " + terminal_link(link, f"\033[2;96m{filepath}\033[0;96m{os.path.basename(filename)}\033[m") + f", in \033[93m{terminal_link(repr(frame.f_globals[name]), fname) if (name in frame.f_globals) else fname}\033[m, line \033[94m{lineno}\033[m{':'*bool(lines)}"), end=_linesep, file=file)
+			else: print(("  \033[2mFile " + terminal_link(link, f"\033[36m{filepath}\033[96m{os.path.basename(filename)}\033[0;2m") + f", in \033[93m{fname}\033[0;2m, line \033[94m{lineno}\033[m"), end=_linesep, file=file)
 
 			try: mlw = (os.get_terminal_size().columns - 12)-1
 			except Exception: mlw = int()
@@ -3043,7 +3153,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n', _im
 					print(end=f"\033[{hc}m", file=file)
 					hline = hline.replace(r';00m', rf";00;{hc}m") # TODO FIXME \033
 
-				print(hline.rstrip().expandtabs(4), end='\033[m\n', file=file) #'\033[m'+ # XXX?
+				print(hline.rstrip().expandtabs(4), end='\033[m'+_linesep, file=file) #'\033[m'+ # XXX?
 
 				if (codepos is not None and codepos[0] <= ln <= codepos[1]):
 					nt, sl = S(line).lstripcount('\t')
@@ -3063,28 +3173,27 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n', _im
 						)
 						if r-l > 3
 						else ' \033[2;95m^\033[m'
-					), sep='', end='\033[m\n', file=file)
+					), sep='', end='\033[m'+_linesep, file=file)
 		else:
 			#if (lines == lastlines): repeated += 1 # TODO FIXME XXX: scope
 			if (lines != lastlines or repeated <= 1):
 				if ((lines or (lineno is not None and lineno > 0 and not filename.endswith('\0'))) and not lastlines and _linesep is not None): print(end=_linesep, file=file)
-				print("    \033[2m..."+('\033[m'*bool(lines or (lineno is not None and lineno > 0 and not filename.endswith('\0'))))+f"in \033[93m{name}\033[m{':'*bool(lines)}", file=file)
-				if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[m\n", file=file); repeated = int()
-		last = (filename, name, lineno)
+				print("    \033[2m..."+('\033[m'*bool(lines or (lineno is not None and lineno > 0 and not filename.endswith('\0'))))+f"in \033[93m{fname}\033[m{':'*bool(lines)}", end=_linesep, file=file)
+				if (repeated > 1): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m more times)\033[m", end=_linesep*2, file=file); repeated = int()
+		last = (filename, qualname, lineno)
 
 		if (lines and repeated < 2):
 			words = list()
 			words_line = set()
 			for ii, l in enumerate(lines, 1):
 				for w in regex.findall(r'(?<=^|[^.[])(\w+|\.\w+|\[[\w-]+\]?)', l[1]):
+					if (w.isdigit() or keyword.iskeyword(w)): continue
 					if (words and w[:1] in '.['): w = (words[-1] + w) #words[-1] += w
 					words.append(w)
 					if (ii == len(lines)): words_line.add(w)
 
 			inaccessible = set()
 			for w in S(words).uniquize():
-				if (keyword.iskeyword(w)): continue
-
 				v = None
 				#if (any(map(w.startswith, inaccessible))): v = '\033[3;90m<inaccessible>\033[m'
 				for color, ns in ((93, frame.f_locals), (92, frame.f_globals), (95, builtins.__dict__)):
@@ -3100,10 +3209,10 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n', _im
 
 						try: r_ = try_repr(obj, first=False)
 						except Exception: pass
-						else: r += '\n'+S(r_).noesc()
+						else: r += _linesep+S(r_).noesc()
 					if (r == w): continue
 
-					r = S('\n').join((terminal_link(i, i_) if ((i_ := i.fit(mlw-len(w)-1)) != i) else i) for i in r.splitlines())
+					r = S(_linesep).join((terminal_link(i, i_) if ((i_ := i.fit(mlw-len(w)-1)) != i) else i) for i in r.splitlines())
 					v = f"\033[{color}m{r.indent(12+len(w)+2, tab_width=None, first=False)}\033[m"
 					break
 				else:
@@ -3119,48 +3228,59 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n', _im
 						except Exception: name = w
 
 					if (scope.get((last, name)) != v):
-						print(f"{' '*12}\033[{'2;'*(w not in words_line)}{'2;92' if (ns is frame.f_locals and w in frame.f_code.co_varnames[:frame.f_code.co_argcount]) else '94'}m{name}\033[0;2m:\033[m \033[2m{v}", file=file)
+						print(f"{' '*12}\033[{'2;'*(w not in words_line)}{'2;92' if (ns is frame.f_locals and w in frame.f_code.co_varnames[:frame.f_code.co_argcount]) else '94'}m{name}\033[0;2m:\033[m \033[2m"+v, end=_linesep, file=file)
 						scope[last, name] = v
 
 			if (_linesep is not None): print(end=_linesep, file=file)
 		#elif (lastlines and _linesep is not None): print(end=_linesep, file=file) # XXX?
 		lastlines = lines
 
-	if (repeated): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m times)\033[m\n", file=file); repeated = int() # TODO FIXME needed?
+	if (repeated): print(f" \033[2;3m(last frame repeated \033[1m{repeated}\033[0;2;3m times)\033[m", end=_linesep*2, file=file); repeated = int() # TODO FIXME needed?
 
-	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[0;2m{exctype.__name__}\033[m", file=file)
+	if (exctype is KeyboardInterrupt and not exc.args): print(f"\033[0;2m{exctype.__name__}\033[m", end=_linesep, file=file)
 	elif (exc is not None):
 		try: s = str(exc)
 		except Exception as ex: s = f"\033[2;3m (\033[91m{terminal_link(repr(ex), '<exception str() failed>')}\033[39m)\033[m"
 		else:
 			if (s): s = f": {s}"
-		print(f"\033[0;1;{96 if (issubclass(exctype, SyntaxError)) else 91}m{exctype.__name__}\033[m{s}", file=file)
+		print(f"\033[0;1;{96 if (issubclass(exctype, SyntaxError)) else 91}m{exctype.__name__}\033[m{s}", end=_linesep, file=file)
 
 	try:
 		if (exc.print_file_and_line is not False):
 			try: line = highlight(exc.text)
 			except Exception: line = exc.text
-			if (line is not None): print(f"{line.rstrip().expandtabs(1)}\n{' '*(exc.offset-1)}\033[95m{'^'*max(1, (getattr(exc, 'end_offset', exc.offset) - exc.offset) if (exc.lineno == getattr(exc, 'end_lineno', exc.lineno)) else (len(exc.text)-exc.offset+1))}{'⋯'*(getattr(exc, 'end_lineno', exc.lineno) > exc.lineno)}\033[m", file=file)
+			if (line is not None): print(f"{line.rstrip().expandtabs(1)}{_linesep}{' '*(exc.offset-1)}\033[95m{'^'*max(1, (getattr(exc, 'end_offset', exc.offset) - exc.offset) if (exc.lineno == getattr(exc, 'end_lineno', exc.lineno)) else (len(exc.text)-exc.offset+1))}{'⋯'*(getattr(exc, 'end_lineno', exc.lineno) > exc.lineno)}\033[m", end=_linesep, file=file)
 	except AttributeError: pass
 
 	for i in getattr(exc, '__notes__', ()):
-		print(f"  \033[2m{i}\033[m", file=file)
+		print(f"  \033[2m{i}\033[m", end=_linesep, file=file)
 
 	#if (exctype is TypeError):
-	#	print(f"           \033[3m(called as a \033[4m{'method' if () else 'function'}\033[24m)\033[m", file=file)
+	#	print(f"           \033[3m(called as a \033[4m{'method' if () else 'function'}\033[24m)\033[m", end=_linesep, file=file)
+
+	if (issubclass(exctype, BaseExceptionGroup) and (l := len(exc.exceptions))):
+		print(f"\033[2m╰╮\033[3m{Sstr(1).sub()}\033[22;23m", end=_linesep, file=file)
+		for ii, i in enumerate(exc.exceptions, 1):
+			print(end=f" \033[2m{'╰├'[ii < l]} \033[22m", file=file)
+			Sexcepthook(i, file=file, linesep=_linesep+('\033[2m│\033[22m' if (ii < l) else ' ').join('  '), _import=_import)
+			if (ii < l): print(f"\033[D\033[2;3m{Sstr(ii+1).sub()}\033[22;23m", end=_linesep, file=file)
+			else: print(end='\033[3D', file=file)
 
 	if (exc is not None and exc.__cause__ is not None):
-		print("\n \033[0;1m> This exception was caused by:\033[m\n", file=file)
-		Sexcepthook(exc.__cause__, file=file, linesep=_linesep, _import=_import)
+		print(_linesep+" \033[0;1m> This exception was caused by:\033[22m", end=_linesep, file=file)
+		if (exc.__cause__ is exc): print(f"   \033[2m<same {exctype.__name__} as above>\033[22m", end=_linesep, file=file)
+		else:
+			print(end=_linesep, file=file)
+			Sexcepthook(exc.__cause__, file=file, linesep=_linesep, _import=_import)
 
-	if (__repl__ and not _import and tb is not None and (tb.tb_frame.f_code.co_filename.startswith('<stdin') or tb.tb_frame.f_code.co_filename.startswith('<python-input-'))):
+	if (__repl__ and not _import and tb is not None and ((fn := tb.tb_frame.f_code.co_filename).startswith('<stdin') or fn.startswith('<python-input') or fn.startswith('<help'))):
 		if (exctype is NameError and exc.args and
 		    (m := re.fullmatch(r"name '(\w+)' is not defined", exc.args[0])) is not None):
 			try:
 				if ((module := importlib.util.find_spec(m[1])) is not None):
-					print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[m", file=file)
+					print(_linesep+f"\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[m", end=_linesep, file=file)
 
-					try: mod = module.loader.load_module()
+					try: mod = (module.loader.load_module() if (module.loader is not None) else importlib.import_module(module.name))
 					except Exception: Sexcepthook(file=file, linesep=_linesep, _import=True)
 					else: frame.f_globals[m[1]] = mod; repl_redisplay()
 			except Exception: pass
@@ -3168,7 +3288,7 @@ def Sexcepthook(exctype=None, exc=None, tb=None, *, file=None, linesep='\n', _im
 		      (m := re.fullmatch(r"module '(\w+)(.+)?' has no attribute '(\w+)'", exc.args[0])) is not None):
 			try:
 				if ((module := importlib.util.find_spec(m[1]+(m[2] or '')+'.'+m[3])) is not None):
-					print(f"\n\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[m", file=file)
+					print(_linesep+f"\033[0;96m>>> \033[2mimport \033[1m{module.name}\033[m", end=_linesep, file=file)
 					ns = (operator.attrgetter(m[2].removeprefix('.'))(frame.f_globals[m[1]]) if (m[2]) else frame.f_globals[m[1]])
 
 					try: mod = importlib.import_module(module.name)
@@ -3184,7 +3304,7 @@ def _Sexcepthook_install():
 		sys.excepthook = Sexcepthook
 	log._exc_handlers.add(lambda e, ex: Sexcepthook(ex)) # FIXME
 Sexcepthook.install = _Sexcepthook_install
-if (os.getenv('SEXCEPTHOOK', '')[:1].casefold() in '1y' and sys.stderr.isatty()): Sexcepthook.install()
+if (os.getenv('SEXCEPTHOOK', '')[:1].casefold() in '1yt' and sys.stderr.isatty()): Sexcepthook.install()
 
 def getsrc(x, *, color=None, clear_term=True, ret=False):
 	if (color is None): color = (not ret and sys.stdout.isatty())
